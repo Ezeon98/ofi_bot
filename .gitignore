@@ -1,0 +1,12 @@
+# Excluir variables de entorno
+.env
+__pycache__/
+*.pyc
+gastos.db
+audio.ogg
+ticket.jpg
+*.env
+static/grafico_whatsapp/
+static/*.ogg
+static/*.jpg
+docker-compose.override.yml

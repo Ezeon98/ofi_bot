@@ -1,0 +1,105 @@
+services:
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: job_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-whatsapp_finance}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-whatsapp_finance}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── App ────────────────────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+    container_name: job_app
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      PGADMIN_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_PASSWORD: ${PGADMIN_PASSWORD}
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN}
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET}
+      PHONE_NUMBER_ID: ${PHONE_NUMBER_ID}
+      WABA_ID: ${WABA_ID}
+      VERIFY_TOKEN: ${VERIFY_TOKEN}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      BOT_PHONE_NUMBER: ${BOT_PHONE_NUMBER}
+      MP_PLUS_MONTHLY_TRIAL: 4044403edc3348b88d0f31f12a13c8b8
+      MP_PLUS_ANNUAL_TRIAL: 475403631d824a4ebdd2c79ffff38061
+      MP_PLAN_MONTHLY_TRIAL: d178a39bf94b443f8239dedb080e2bb3
+      MP_PLAN_ANNUAL_TRIAL: da971ab9efa048ccbd0fd3fc664a38eb
+      MP_PREMIUM_MONTHLY_TRIAL: 86a9648399f542209bdb37ba16fb0372
+      MP_PREMIUM_ANNUAL_TRIAL: 4777cca4fe604b9da41c4b7d0b47bea7
+
+      MP_WEBHOOK_SECRET: ${MP_WEBHOOK_SECRET}
+      ADMIN_PHONE: ${ADMIN_PHONE:-54111562527111}
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH}
+      TRANSFER_ALIAS: ${TRANSFER_ALIAS}
+      FREE_WEEKLY_GASTO_LIMIT: ${FREE_WEEKLY_GASTO_LIMIT:-7}
+      FREE_INGRESO_LIMIT: ${FREE_INGRESO_LIMIT:-1}
+      DEBUG: ${DEBUG:-false}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+
+    volumes:
+      - ./src:/app/src         
+      - ./static:/app/static
+      - ./frontend:/app/frontend
+      - app_tmp:/app/tmp
+      - ./alembic/versions:/app/alembic/versions
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${PORT:-8000}:8000"
+      - "3002:3002"             # debugpy — active only when DEBUG=true
+
+  # ── PgAdmin ────────────────────────────────────────────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: job_pgadmin
+    user: root
+    entrypoint: >
+      /bin/sh -c "
+      chmod 600 /pgadmin4/pgpass;
+      chown pgadmin:pgadmin /pgadmin4/pgpass;
+      cp -afr /pgadmin4/pgpass /var/lib/pgadmin/;
+      /entrypoint.sh
+      "
+    depends_on:
+      - postgres
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_LISTEN_PORT: 80
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "False"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json
+      - ./pgadmin/pgpass:/pgadmin4/pgpass
+      - ./pgadmin/config_local.py:/pgadmin4/config_local.py
+    ports:
+      - "8098:80"
+
+  redis:
+    image: redis:7
+    # ports:
+    #   - "6379:6379"
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+  app_tmp:

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Planes y Suscripción</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/suscripcion/assets/styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <span class="logo-icon">🤖</span>
+                <h1>Mi Bot <span class="premium-badge">Premium</span></h1>
+            </div>
+            <p class="subtitle">Tu asistente en WhatsApp.</p>
+        </header>
+
+        <!-- Plan Selection (Landing) -->
+        <section id="plan-selection" class="section">
+            <div class="plans-grid-3">
+                <!-- Free -->
+                <div class="plan-card-static">
+                    <div class="plan-tier-label">PLAN</div>
+                    <h3>Gratuito</h3>
+                    <p class="plan-desc-small">Para empezar sin costo.</p>
+                    <div class="plan-price-big">$0<span class="plan-freq">/ mes</span></div>
+                    <div class="plan-feat-title">INCLUIDO</div>
+                    <ul class="plan-features">
+                        <li>✔ Funciones básicas</li>
+                        <li>✔ Hasta 30 mensajes por mes</li>
+                    </ul>
+                    <a href="https://wa.me/YOUR_BOT_NUMBER" class="btn-plan btn-free">Empezar gratis</a>
+                </div>
+
+                <!-- Pro -->
+                <div class="plan-card-static popular">
+                    <div class="plan-badge">POPULAR</div>
+                    <div class="plan-tier-label accent">PLAN</div>
+                    <h3>Pro</h3>
+                    <p class="plan-desc-small">Todo lo que necesitás.</p>
+                    <div class="plan-price-big" id="pro-price"></div>
+                    <div class="plan-annual-note" id="pro-annual-note"></div>
+                    <div class="plan-feat-title">INCLUIDO</div>
+                    <ul class="plan-features">
+                        <li>✔ Funciones avanzadas</li>
+                        <li>✔ Mensajes ilimitados</li>
+                    </ul>
+                    <button class="btn-plan btn-pro" data-tier="pro">Activar Pro →</button>
+                </div>
+
+                <!-- Premium -->
+                <div class="plan-card-static recommended">
+                    <div class="plan-badge recommended-badge">RECOMENDADO</div>
+                    <div class="plan-tier-label accent">PLAN</div>
+                    <h3>Premium</h3>
+                    <p class="plan-desc-small">Sin límites.</p>
+                    <div class="plan-price-big" id="premium-price"></div>
+                    <div class="plan-annual-note" id="premium-annual-note"></div>
+                    <div class="plan-feat-title">TODO LO DE PRO, MÁS:</div>
+                    <ul class="plan-features">
+                        <li>✔ Todas las funciones</li>
+                        <li>✔ Soporte prioritario</li>
+                    </ul>
+                    <button class="btn-plan btn-premium" data-tier="premium">Activar Premium →</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Frequency Picker -->
+        <section id="frequency-section" class="section" style="display: none;">
+            <h2 id="freq-title">Elegí tu frecuencia</h2>
+            <div class="freq-cards" id="freq-cards"></div>
+            <button class="btn-back" id="btn-back-plans">← Volver a planes</button>
+        </section>
+
+        <!-- Payment Form -->
+        <section id="payment-section" class="section" style="display: none;">
+            <h2>Datos de pago</h2>
+            <div class="selected-plan-info" id="selected-plan-info"></div>
+
+            <form id="form-checkout" novalidate>
+                <div class="form-group">
+                    <label for="form-checkout__cardNumber">Número de tarjeta</label>
+                    <div id="form-checkout__cardNumber" class="mp-input-container"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group half">
+                        <label for="form-checkout__expirationDate">Vencimiento</label>
+                        <div id="form-checkout__expirationDate" class="mp-input-container"></div>
+                    </div>
+                    <div class="form-group half">
+                        <label for="form-checkout__securityCode">CVV</label>
+                        <div id="form-checkout__securityCode" class="mp-input-container"></div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="form-checkout__cardholderName">Titular de la tarjeta</label>
+                    <input type="text" id="form-checkout__cardholderName" placeholder="Como figura en la tarjeta" autocomplete="cc-name" />
+                </div>
+                <div class="form-group">
+                    <label for="form-checkout__cardholderEmail">Email</label>
+                    <input type="email" id="form-checkout__cardholderEmail" placeholder="tu@email.com" autocomplete="email" />
+                </div>
+                <div class="form-row">
+                    <div class="form-group half">
+                        <label for="form-checkout__identificationType">Tipo de documento</label>
+                        <select id="form-checkout__identificationType"></select>
+                    </div>
+                    <div class="form-group half">
+                        <label for="form-checkout__identificationNumber">Número de documento</label>
+                        <input type="text" id="form-checkout__identificationNumber" placeholder="12345678" autocomplete="off" />
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="form-checkout__issuer">Banco emisor</label>
+                    <select id="form-checkout__issuer"></select>
+                </div>
+                <select id="form-checkout__installments" style="display:none;"></select>
+                <div id="form-errors" class="form-errors" style="display: none;"></div>
+                <button type="submit" id="form-checkout__submit" class="btn-subscribe" disabled>
+                    <span class="btn-text">Suscribirme</span>
+                    <span class="btn-loading" style="display:none;">
+                        <span class="spinner"></span> Procesando...
+                    </span>
+                </button>
+            </form>
+            <button class="btn-back" id="btn-back-freq">← Volver</button>
+        </section>
+
+        <!-- Result -->
+        <section id="result-section" class="section" style="display: none;">
+            <div id="result-content"></div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Pagos procesados de forma segura por MercadoPago</p>
+            <p class="footer-small">Tus datos de tarjeta nunca pasan por nuestros servidores.</p>
+        </footer>
+    </div>
+
+    <script src="https://sdk.mercadopago.com/js/v2"></script>
+    <script src="/suscripcion/assets/app.js"></script>
+</body>
+</html>
