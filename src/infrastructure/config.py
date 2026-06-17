@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     @computed_field  # type: ignore[misc]
     @property
     def meta_api_url(self) -> str:
-        return f"https://graph.facebook.com/v22.0/{self.phone_number_id}/messages"
+        return f"https://graph.facebook.com/v23.0/{self.phone_number_id}/messages"
 
     @computed_field  # type: ignore[misc]
     @property

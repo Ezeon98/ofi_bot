@@ -6,7 +6,7 @@ No business logic here — pure persistence.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +36,7 @@ class MemoryRepository:
         min_importance: float = 0.0,
         limit: int = 50,
     ) -> list[MemoryRead]:
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()  # ponytail: naive UTC matches TIMESTAMP WITHOUT TIME ZONE column; upgrade path: migrate column to DateTime(timezone=True)
         stmt = (
             select(UserMemoryModel)
             .where(
@@ -61,7 +61,7 @@ class MemoryRepository:
             existing.value = data.value
             existing.importance = data.importance
             existing.expires_at = data.expires_at
-            existing.updated_at = datetime.now(timezone.utc)
+            existing.updated_at = datetime.utcnow()
             await self._session.flush()
             return MemoryRead.model_validate(existing)
 
@@ -157,7 +157,7 @@ class ConversationRepository:
         await self._session.execute(
             update(ConversationModel)
             .where(ConversationModel.id == conversation_id)
-            .values(last_message_at=datetime.now(timezone.utc))
+            .values(last_message_at=datetime.utcnow())
         )
         await self._session.flush()
         return ConversationTurnRead.model_validate(turn)

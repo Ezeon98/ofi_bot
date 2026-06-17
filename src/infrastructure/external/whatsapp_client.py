@@ -49,6 +49,29 @@ async def enviar_mensaje(telefono: str, texto: str) -> None:
             logger.error("Error sending message to %s: %s %s", telefono, resp.status_code, _resp_body(resp))
 
 
+async def enviar_typing(telefono: str, message_id: str = "") -> None:
+    """Send a typing indicator ("escribiendo...") to the user."""
+    s = _settings()
+    if not message_id:
+        logger.warning("typing indicator skipped for %s: missing message_id", telefono)
+        return
+    payload: dict[str, Any] = {
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": message_id,
+        "typing_indicator": {"type": "text"},
+    }
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(s.meta_api_url, headers=s.meta_headers, json=payload)
+        if resp.status_code != 200:
+            logger.warning(
+                "typing indicator failed for %s: %s %s",
+                telefono,
+                resp.status_code,
+                _resp_body(resp),
+            )
+
+
 async def enviar_imagen(telefono: str, archivo_local: str, caption: str = "") -> None:
     """Upload and send an image."""
     s = _settings()

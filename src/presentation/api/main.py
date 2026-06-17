@@ -186,7 +186,7 @@ async def _handle_webhook_entries(uow: UnitOfWork, body: dict) -> None:
                     match msg_type:
                         case "text":
                             texto = message["text"]["body"]
-                            await procesar_texto(uow, sender, texto)
+                            await procesar_texto(uow, sender, texto, msg_id)
                         case "interactive":
                             interactive = message.get("interactive", {})
                             int_type = interactive.get("type")

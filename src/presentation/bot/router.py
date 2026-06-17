@@ -6,7 +6,7 @@ import logging
 
 from src.infrastructure.config import get_settings
 from src.infrastructure.container import UnitOfWork
-from src.infrastructure.external.whatsapp_client import enviar_mensaje
+from src.infrastructure.external.whatsapp_client import enviar_mensaje, enviar_typing
 from src.orchestrator.ai_orchestrator import AIOrchestrator
 from src.presentation.bot.handlers.menu import enviar_menu_principal
 
@@ -25,7 +25,7 @@ def _get_orchestrator() -> AIOrchestrator:
     return _orchestrator
 
 
-async def procesar_texto(uow: UnitOfWork, sender: str, texto: str) -> None:
+async def procesar_texto(uow: UnitOfWork, sender: str, texto: str, message_id: str = "") -> None:
     """Process an incoming text message via the AI orchestrator."""
     texto_lower = texto.strip().lower()
 
@@ -40,6 +40,7 @@ async def procesar_texto(uow: UnitOfWork, sender: str, texto: str) -> None:
         return
 
     orchestrator = _get_orchestrator()
+    await enviar_typing(sender, message_id)
     response = await orchestrator.process(
         user_id=sender,
         message=texto,
