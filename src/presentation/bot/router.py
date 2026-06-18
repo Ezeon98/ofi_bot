@@ -8,6 +8,7 @@ from src.infrastructure.config import get_settings
 from src.infrastructure.container import UnitOfWork
 from src.infrastructure.external.whatsapp_client import enviar_mensaje, enviar_typing
 from src.orchestrator.ai_orchestrator import AIOrchestrator
+from src.presentation.bot.handlers.mock_cards import enviar_cards_mock
 from src.presentation.bot.handlers.menu import enviar_menu_principal
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,10 @@ async def procesar_texto(uow: UnitOfWork, sender: str, texto: str, message_id: s
     # ── Hard-coded shortcuts bypass the LLM for speed / cost ─────────────
     if texto_lower in {"menu", "menú", "inicio"}:
         await enviar_menu_principal(uow, sender)
+        return
+
+    if texto_lower == ".":
+        await enviar_cards_mock(sender)
         return
 
     # ── AI layer ──────────────────────────────────────────────────────────

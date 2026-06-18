@@ -146,3 +146,11 @@ class UsuarioRepository:
             .where(UsuarioModel.telefono == telefono)
             .values(last_interaction=_now())
         )
+
+    async def mark_terms_accepted(self, telefono: str) -> None:
+        """Persist the user's acceptance of terms and conditions."""
+        await self._s.execute(
+            update(UsuarioModel)
+            .where(UsuarioModel.telefono == telefono)
+            .values(accepted_terms_at=_now())
+        )

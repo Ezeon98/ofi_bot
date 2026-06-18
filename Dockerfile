@@ -2,6 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+ENV PYTHONUNBUFFERED=1
+ENV PYDEVD_DISABLE_FILE_VALIDATION=1
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     build-essential \
@@ -15,6 +18,7 @@ COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
 COPY frontend/ ./frontend/
+COPY static/ ./static/
 
 COPY bootstrap.sh /app/bootstrap.sh
 RUN chmod +x /app/bootstrap.sh

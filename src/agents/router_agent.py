@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 # We default to gpt-4o-mini; the orchestrator overrides via the `model` param.
 
 router_agent: Agent[AgentDependencies, AgentResponse] = Agent(
-    model="openai:gpt-4o-mini",
+    model="openai-chat:gpt-4o-mini",
     deps_type=AgentDependencies,
     output_type=AgentResponse,
     system_prompt=ROUTER_SYSTEM_PROMPT,

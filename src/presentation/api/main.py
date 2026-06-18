@@ -21,7 +21,9 @@ from src.infrastructure.container import UnitOfWork
 from src.infrastructure.database.session import get_session
 from src.infrastructure.external.whatsapp_client import enviar_mensaje
 from src.presentation.bot.router import procesar_texto
+from src.presentation.bot.terms_gate import handle_terms_gate
 from src.presentation.bot.handlers.menu import enviar_menu_principal
+from src.presentation.bot.handlers.location import procesar_ubicacion
 from src.presentation.api.subscriptions import router as subscriptions_router
 from src.utils.rate_limiter import check_rate_limit
 
@@ -155,7 +157,7 @@ async def _handle_webhook_entries(uow: UnitOfWork, body: dict) -> None:
 
                 logger.info("Mensaje de %s | tipo: %s", sender, msg_type)
 
-                _HANDLED_TYPES = {"text", "interactive"}
+                _HANDLED_TYPES = {"text", "interactive", "location", "audio", "image"}
                 if msg_type not in _HANDLED_TYPES:
                     logger.debug("Tipo no manejado ignorado: %s", msg_type)
                     continue
@@ -180,13 +182,26 @@ async def _handle_webhook_entries(uow: UnitOfWork, body: dict) -> None:
                     sender, usuario = await uow.usuarios.resolve_sender(sender, bsuid)
                     if not usuario:
                         await uow.usuarios.create(sender, bsuid)
+                        usuario = await uow.usuarios.get(sender)
 
                     await uow.usuarios.touch_interaction(sender)
+
+                    if usuario and await handle_terms_gate(
+                        sender=sender,
+                        accepted_terms_at=getattr(usuario, "accepted_terms_at", None),
+                        message=message,
+                        mark_accepted=lambda: uow.usuarios.mark_terms_accepted(sender),
+                        on_accept=lambda: enviar_menu_principal(uow, sender),
+                    ):
+                        continue
 
                     match msg_type:
                         case "text":
                             texto = message["text"]["body"]
                             await procesar_texto(uow, sender, texto, msg_id)
+                        case "location":
+                            loc = message["location"]
+                            await procesar_ubicacion(sender, loc["latitude"], loc["longitude"])
                         case "interactive":
                             interactive = message.get("interactive", {})
                             int_type = interactive.get("type")

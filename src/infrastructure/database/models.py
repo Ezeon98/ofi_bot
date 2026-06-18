@@ -58,6 +58,7 @@ class UsuarioModel(Base):
     bsuid: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True, index=True)
     # Last interaction for 24h messaging window
     last_interaction: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    accepted_terms_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class EstadoUsuarioModel(Base):

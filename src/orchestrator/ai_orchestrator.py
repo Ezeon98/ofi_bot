@@ -123,7 +123,7 @@ class AIOrchestrator:
             result = await router_agent.run(
                 user_prompt,
                 deps=deps,
-                model=f"openai:{self._settings.openai_model}",
+                model=f"openai-chat:{self._settings.openai_model}",
             )
             agent_response: AgentResponse = result.output
         except Exception as exc:
