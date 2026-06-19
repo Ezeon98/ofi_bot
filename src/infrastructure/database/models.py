@@ -6,6 +6,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     Float,
@@ -124,12 +125,23 @@ class MercadoPagoSubscriptionModel(Base):
 
 
 class ProviderModel(Base):
-    """Service provider (prestador) profile."""
+    """Service provider (prestador) profile.
+
+    Draft rows can exist before the provider completes onboarding.
+    Only active providers are expected to have full searchable location data.
+    """
 
     __tablename__ = "providers"
     __table_args__ = (
         Index("ix_providers_plan_activo", "plan", "activo"),
         Index("ix_providers_zona", "zona"),
+        Index("ix_providers_ciudad_barrio_activo", "ciudad", "barrio", "activo"),
+        UniqueConstraint("usuario_id", name="uq_providers_usuario_id"),
+        CheckConstraint(
+            "NOT activo OR "
+            "(lat IS NOT NULL AND lon IS NOT NULL AND ciudad IS NOT NULL AND barrio IS NOT NULL)",
+            name="ck_providers_active_requires_location",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -139,6 +151,8 @@ class ProviderModel(Base):
     nombre: Mapped[str] = mapped_column(String(100), nullable=False)
     rubros: Mapped[str] = mapped_column(Text, nullable=False, default="[]")  # JSON array
     zona: Mapped[str] = mapped_column(String(100), nullable=False)
+    ciudad: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    barrio: Mapped[str | None] = mapped_column(String(120), nullable=True)
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lon: Mapped[float | None] = mapped_column(Float, nullable=True)
     disponibilidad: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -160,6 +174,40 @@ class ProviderModel(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class TradeModel(Base):
+    """Normalized catalog of provider trades/officios."""
+
+    __tablename__ = "trades"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_trades_slug"),
+        UniqueConstraint("nombre", name="uq_trades_nombre"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(String(80), nullable=False)
+    nombre: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+
+class ProviderTradeModel(Base):
+    """Many-to-many link between providers and trades."""
+
+    __tablename__ = "provider_trades"
+    __table_args__ = (Index("ix_provider_trades_trade_provider", "trade_id", "provider_id"),)
+
+    provider_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("providers.id", ondelete="CASCADE"), primary_key=True
+    )
+    trade_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("trades.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
     )
 
 

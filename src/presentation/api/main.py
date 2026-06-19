@@ -20,11 +20,15 @@ from src.infrastructure.config import get_settings
 from src.infrastructure.container import UnitOfWork
 from src.infrastructure.database.session import get_session
 from src.infrastructure.external.whatsapp_client import enviar_mensaje
-from src.presentation.bot.router import procesar_texto
-from src.presentation.bot.terms_gate import handle_terms_gate
-from src.presentation.bot.handlers.menu import enviar_menu_principal
-from src.presentation.bot.handlers.location import procesar_ubicacion
 from src.presentation.api.subscriptions import router as subscriptions_router
+from src.presentation.bot.handlers.location import reverse_geocode_location
+from src.presentation.bot.router import procesar_texto
+from src.presentation.bot.terms_gate import (
+    POST_TERMS_OFFER_SERVICES_BUTTON_ID,
+    POST_TERMS_SEEK_SERVICES_BUTTON_ID,
+    handle_terms_gate,
+    send_post_terms_service_choice,
+)
 from src.utils.rate_limiter import check_rate_limit
 
 logger = logging.getLogger(__name__)
@@ -38,6 +42,18 @@ logging.basicConfig(
 )
 for _noisy in ("sqlalchemy", "httpx", "httpcore", "asyncpg", "watchfiles"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+# Dedicated handler for the "agent" logger — outputs JSON lines to a separate
+# file so you can tail/filter agent decisions independently.
+_agent_logger = logging.getLogger("agent")
+_agent_logger.setLevel(logging.INFO if settings.agent_logging_enabled else logging.WARNING)
+_agent_handler = logging.FileHandler(
+    os.path.join(os.path.dirname(settings.tmp_dir), "agent.log"),
+    encoding="utf-8",
+)
+_agent_handler.setFormatter(logging.Formatter("%(message)s"))
+_agent_logger.propagate = False
+_agent_logger.addHandler(_agent_handler)
 
 # ── Deduplication via Redis ───────────────────────────────────────────────────
 redis_client = redis.Redis(
@@ -191,28 +207,85 @@ async def _handle_webhook_entries(uow: UnitOfWork, body: dict) -> None:
                         accepted_terms_at=getattr(usuario, "accepted_terms_at", None),
                         message=message,
                         mark_accepted=lambda: uow.usuarios.mark_terms_accepted(sender),
-                        on_accept=lambda: enviar_menu_principal(uow, sender),
+                        on_accept=lambda: send_post_terms_service_choice(sender),
                     ):
                         continue
 
                     match msg_type:
                         case "text":
                             texto = message["text"]["body"]
-                            await procesar_texto(uow, sender, texto, msg_id)
+                            await procesar_texto(
+                                uow,
+                                sender,
+                                texto,
+                                msg_id,
+                                metadata={"message_type": "text"},
+                            )
                         case "location":
                             loc = message["location"]
-                            await procesar_ubicacion(sender, loc["latitude"], loc["longitude"])
+                            location_data = await reverse_geocode_location(
+                                loc["latitude"],
+                                loc["longitude"],
+                            )
+                            location_parts = [
+                                part
+                                for part in [location_data.get("barrio"), location_data.get("ciudad")]
+                                if part
+                            ]
+                            location_label = ", ".join(location_parts) or (
+                                f"{loc['latitude']}, {loc['longitude']}"
+                            )
+                            await procesar_texto(
+                                uow,
+                                sender,
+                                f"Mi ubicación es {location_label}",
+                                msg_id,
+                                metadata={
+                                    "message_type": "location",
+                                    "latitude": loc["latitude"],
+                                    "longitude": loc["longitude"],
+                                    "ciudad": location_data.get("ciudad"),
+                                    "barrio": location_data.get("barrio"),
+                                },
+                            )
                         case "interactive":
                             interactive = message.get("interactive", {})
                             int_type = interactive.get("type")
                             if int_type == "list_reply":
                                 selected_id = interactive["list_reply"]["id"]
-                                # TODO: Add your selection handler here
-                                await enviar_mensaje(sender, f"Seleccionaste: {selected_id}")
+                                title = interactive["list_reply"].get("title", selected_id)
+                                await procesar_texto(
+                                    uow,
+                                    sender,
+                                    title,
+                                    msg_id,
+                                    metadata={
+                                        "message_type": "interactive",
+                                        "interactive_type": "list_reply",
+                                        "selected_id": selected_id,
+                                        "selected_title": title,
+                                    },
+                                )
                             elif int_type == "button_reply":
                                 btn_id = interactive["button_reply"]["id"]
-                                # TODO: Add your button handler here
-                                await enviar_mensaje(sender, f"Botón: {btn_id}")
+                                title = interactive["button_reply"].get("title", btn_id)
+                                synthetic_text = title
+                                if btn_id == POST_TERMS_SEEK_SERVICES_BUTTON_ID:
+                                    synthetic_text = "Quiero buscar servicios"
+                                elif btn_id == POST_TERMS_OFFER_SERVICES_BUTTON_ID:
+                                    synthetic_text = "Quiero ofrecer servicios"
+                                await procesar_texto(
+                                    uow,
+                                    sender,
+                                    synthetic_text,
+                                    msg_id,
+                                    metadata={
+                                        "message_type": "interactive",
+                                        "interactive_type": "button_reply",
+                                        "button_id": btn_id,
+                                        "button_title": title,
+                                    },
+                                )
                 except Exception as exc:
                     logger.exception("Error procesando mensaje de %s", sender)
                     await enviar_mensaje(

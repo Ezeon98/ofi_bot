@@ -47,8 +47,8 @@ class TermsGateTests(IsolatedAsyncioTestCase):
         )
         enviar_botones_mock.assert_awaited_once()
 
-    async def test_accept_button_marks_acceptance_and_opens_menu(self) -> None:
-        """Accepting terms should persist acceptance and continue to the menu."""
+    async def test_accept_button_marks_acceptance_and_continues_onboarding(self) -> None:
+        """Accepting terms should persist acceptance and continue onboarding."""
         uow = SimpleNamespace(usuarios=SimpleNamespace(mark_terms_accepted=AsyncMock()))
         message = {
             "interactive": {
@@ -83,6 +83,30 @@ class TermsGateTests(IsolatedAsyncioTestCase):
         enviar_mensaje_mock.assert_awaited_once()
         on_accept.assert_awaited_once_with()
         enviar_terminos_mock.assert_not_awaited()
+
+    async def test_send_post_terms_service_choice_sends_expected_buttons(self) -> None:
+        """The post-acceptance step should ask whether the user offers or seeks services."""
+        with patch.object(
+            terms_gate,
+            "enviar_botones_respuesta",
+            new=AsyncMock(),
+        ) as enviar_botones_mock:
+            await terms_gate.send_post_terms_service_choice("5491112345678")
+
+        enviar_botones_mock.assert_awaited_once_with(
+            "5491112345678",
+            "Gracias. Registramos tu aceptación. ¿Ofrecés servicios o buscás servicios?",
+            [
+                {
+                    "id": terms_gate.POST_TERMS_OFFER_SERVICES_BUTTON_ID,
+                    "title": "Ofrezco servicios",
+                },
+                {
+                    "id": terms_gate.POST_TERMS_SEEK_SERVICES_BUTTON_ID,
+                    "title": "Busco servicios",
+                },
+            ],
+        )
 
     async def test_plain_message_without_acceptance_sends_terms_prompt(self) -> None:
         """Any non-accept message should resend the terms prompt."""

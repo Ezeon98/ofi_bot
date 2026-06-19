@@ -23,6 +23,8 @@ TERMS_FILE_PATH = (
 )
 TERMS_ACCEPT_BUTTON_ID = "terms_accept"
 TERMS_REJECT_BUTTON_ID = "terms_reject"
+POST_TERMS_OFFER_SERVICES_BUTTON_ID = "post_terms_offer_services"
+POST_TERMS_SEEK_SERVICES_BUTTON_ID = "post_terms_seek_services"
 
 
 def button_reply_id(message: dict) -> str | None:
@@ -55,6 +57,24 @@ async def send_terms_prompt(sender: str) -> None:
         [
             {"id": TERMS_ACCEPT_BUTTON_ID, "title": "Aceptar"},
             {"id": TERMS_REJECT_BUTTON_ID, "title": "Rechazar"},
+        ],
+    )
+
+
+async def send_post_terms_service_choice(sender: str) -> None:
+    """Ask the user whether they offer or seek services."""
+    await enviar_botones_respuesta(
+        sender,
+        "Gracias. Registramos tu aceptación. ¿Ofrecés servicios o buscás servicios?",
+        [
+            {
+                "id": POST_TERMS_OFFER_SERVICES_BUTTON_ID,
+                "title": "Ofrezco servicios",
+            },
+            {
+                "id": POST_TERMS_SEEK_SERVICES_BUTTON_ID,
+                "title": "Busco servicios",
+            },
         ],
     )
 

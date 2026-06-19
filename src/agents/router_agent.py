@@ -15,6 +15,8 @@ requests. Dependencies are injected per-call via RunContext[AgentDependencies].
 from __future__ import annotations
 
 import logging
+import time
+from typing import Any
 
 from pydantic_ai import Agent, RunContext
 
@@ -31,6 +33,14 @@ from src.tools.business.providers import (
     actualizar_prestador,
     consultar_prestador,
 )
+from src.tools.business.search_state import (
+    ConsultarEstadoBusquedaInput,
+    GuardarEstadoBusquedaInput,
+    LimpiarEstadoBusquedaInput,
+    consultar_estado_busqueda,
+    guardar_estado_busqueda,
+    limpiar_estado_busqueda,
+)
 from src.tools.memory.memory_tools import (
     ActualizarMemoriaInput,
     BuscarMemoriaInput,
@@ -41,6 +51,43 @@ from src.tools.memory.memory_tools import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ── Anti-loop guard ───────────────────────────────────────────────────────────
+# Keeps the last tool call signature so we can detect an identical repeated call
+# (the LLM re-invokes the same tool with the same params in a loop).
+_last_tool_call: dict[str, object] = {}
+_last_tool_time: float = 0.0
+_ANTI_LOOP_WINDOW_S = 30  # seconds within which we consider a call a duplicate
+
+
+def _is_repeat_call(tool_name: str, params: object) -> Any | None:
+    """Return a descriptive dict if the exact same call was made recently."""
+    global _last_tool_call, _last_tool_time
+    now = time.monotonic()
+    sig: dict[str, object] = {"tool": tool_name, "params": str(params)}
+    if (
+        sig == _last_tool_call
+        and now - _last_tool_time < _ANTI_LOOP_WINDOW_S
+    ):
+        logger.warning(
+            "ANTI_LOOP detected repeat call tool=%s params=%s",
+            tool_name, params,
+        )
+        return {
+            "info": "duplicate_call_blocked",
+            "message": (
+                f"Ya buscaste {params.rubro} en {params.zona or 'la ubicación actual'} "
+                "y no se encontraron resultados. No tiene sentido repetir la misma "
+                "búsqueda. Informale al usuario que no hay resultados y sugiere "
+                "alternativas (otro rubro, otra zona, o esperar a que se registren nuevos prestadores)."
+            ),
+            "rubro": params.rubro,
+            "zona": params.zona,
+        }
+    _last_tool_call = sig
+    _last_tool_time = now
+    return None
+
 
 # ── Agent definition ─────────────────────────────────────────────────────────
 # model is set at runtime via AIOrchestrator to allow runtime config changes.
@@ -58,13 +105,32 @@ router_agent: Agent[AgentDependencies, AgentResponse] = Agent(
 # Tools are registered directly on the agent; no magic registry needed here.
 # The ToolRegistry is available for future dynamic loading scenarios.
 
+
 @router_agent.tool
 async def tool_buscar_prestadores(
     ctx: RunContext[AgentDependencies],
     params: BuscarPrestadoresInput,
-) -> list[dict]:
-    """Find service providers matching a rubro and optional zone."""
-    return await buscar_prestadores(ctx, params)
+) -> list[dict] | dict:
+    """Find service providers matching a rubro and optional zone.
+
+    NOTE for the LLM: If this tool returns a dict with "info": "duplicate_call_blocked",
+    it means you already called this exact same search and got 0 results. STOP calling
+    it again and instead inform the user about the lack of results.
+    If it returns an empty list [], there were no providers found.
+    If returns a non-empty list, those are the results.
+    """
+    blocked = _is_repeat_call("tool_buscar_prestadores", params)
+    if blocked is not None:
+        return blocked
+
+    providers = await buscar_prestadores(ctx, params)
+    if not providers:
+        logger.info(
+            "PROVIDER_ZERO_RESULTS tool_name=tool_buscar_prestadores "
+            "rubro=%r zona=%r lat=%r lon=%r",
+            params.rubro, params.zona, params.lat, params.lon,
+        )
+    return providers
 
 
 @router_agent.tool
@@ -92,6 +158,33 @@ async def tool_consultar_prestador(
 ) -> dict:
     """Return the current user's provider profile."""
     return await consultar_prestador(ctx, params)
+
+
+@router_agent.tool
+async def tool_consultar_estado_busqueda(
+    ctx: RunContext[AgentDependencies],
+    params: ConsultarEstadoBusquedaInput,
+) -> dict:
+    """Read the active guided-search state for the current user."""
+    return await consultar_estado_busqueda(ctx, params)
+
+
+@router_agent.tool
+async def tool_guardar_estado_busqueda(
+    ctx: RunContext[AgentDependencies],
+    params: GuardarEstadoBusquedaInput,
+) -> dict:
+    """Persist the guided-search state for the current user."""
+    return await guardar_estado_busqueda(ctx, params)
+
+
+@router_agent.tool
+async def tool_limpiar_estado_busqueda(
+    ctx: RunContext[AgentDependencies],
+    params: LimpiarEstadoBusquedaInput,
+) -> dict:
+    """Clear the guided-search state for the current user."""
+    return await limpiar_estado_busqueda(ctx, params)
 
 
 @router_agent.tool

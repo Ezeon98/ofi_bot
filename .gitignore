@@ -10,3 +10,7 @@ static/grafico_whatsapp/
 static/*.ogg
 static/*.jpg
 docker-compose.override.yml
+
+# Logs generados por el AgentLogger
+agent.log
+tmp/

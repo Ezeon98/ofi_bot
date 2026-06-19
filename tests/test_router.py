@@ -1,4 +1,4 @@
-"""Focused tests for text-router shortcuts."""
+"""Focused tests for AI-only router dispatch."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from types import ModuleType
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
+
+from src.agents.models.response import Intent
 
 
 def _load_router_module():
@@ -21,7 +23,14 @@ def _load_router_module():
             pass
 
         async def process(self, **_kwargs):
-            return SimpleNamespace(message="stub")
+            return SimpleNamespace(
+                message="stub",
+                intent=Intent.CONVERSACION_GENERAL.value,
+                confidence=1.0,
+                entities=None,
+                requires_action=False,
+                metadata=None,
+            )
 
     fake_module.AIOrchestrator = DummyAIOrchestrator
 
@@ -33,25 +42,56 @@ router = _load_router_module()
 
 
 class RouterShortcutTests(IsolatedAsyncioTestCase):
-    """Validate hard-coded shortcuts that bypass the AI layer."""
+    """Validate that inbound messages are always routed to the AI layer."""
 
-    async def test_dot_shortcut_sends_mock_cards(self) -> None:
-        """A single dot should trigger the mock card preview."""
+    async def test_text_message_always_uses_orchestrator(self) -> None:
+        """Even previous shortcut inputs should now go through the orchestrator."""
+        orchestrator = SimpleNamespace(
+            process=AsyncMock(
+                return_value=SimpleNamespace(
+                    message="respuesta ai",
+                    intent=Intent.CONVERSACION_GENERAL.value,
+                    confidence=1.0,
+                    entities=None,
+                    requires_action=False,
+                    metadata=None,
+                )
+            )
+        )
+
         with (
             patch.object(
                 router,
-                "enviar_cards_mock",
-                new=AsyncMock(),
-            ) as enviar_cards_mock,
+                "_get_orchestrator",
+                return_value=orchestrator,
+            ),
             patch.object(
                 router,
-                "_get_orchestrator",
-            ) as get_orchestrator,
+                "enviar_typing",
+                new=AsyncMock(),
+            ),
+            patch.object(
+                router,
+                "enviar_mensaje",
+                new=AsyncMock(),
+            ) as enviar_mensaje_mock,
         ):
-            await router.procesar_texto(SimpleNamespace(), "5491112345678", ".")
+            uow = SimpleNamespace(_session=object())
+            await router.procesar_texto(
+                uow,
+                "5491112345678",
+                ".",
+                "wamid-1",
+                {"message_type": "text"},
+            )
 
-        enviar_cards_mock.assert_awaited_once_with("5491112345678")
-        get_orchestrator.assert_not_called()
+        orchestrator.process.assert_awaited_once_with(
+            user_id="5491112345678",
+            message=".",
+            db=uow._session,
+            metadata={"message_type": "text"},
+        )
+        enviar_mensaje_mock.assert_awaited_once_with("5491112345678", "respuesta ai")
 
     async def test_cards_handler_sends_one_cta_per_mock_card(self) -> None:
         """The mock handler should emit the expected intro plus CTA cards."""

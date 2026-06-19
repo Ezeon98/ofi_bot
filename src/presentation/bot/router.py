@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
+import time
+from typing import Any
 
 from src.infrastructure.config import get_settings
 from src.infrastructure.container import UnitOfWork
 from src.infrastructure.external.whatsapp_client import enviar_mensaje, enviar_typing
 from src.orchestrator.ai_orchestrator import AIOrchestrator
-from src.presentation.bot.handlers.mock_cards import enviar_cards_mock
-from src.presentation.bot.handlers.menu import enviar_menu_principal
+from src.utils.agent_logger import AgentLogger
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 # ponytail: module-level singleton; fine for single-process deployments.
 #           For multi-worker setups pass via DI container instead.
 _orchestrator: AIOrchestrator | None = None
+_alog = AgentLogger(enabled=get_settings().agent_logging_enabled)
 
 
 def _get_orchestrator() -> AIOrchestrator:
@@ -26,29 +28,48 @@ def _get_orchestrator() -> AIOrchestrator:
     return _orchestrator
 
 
-async def procesar_texto(uow: UnitOfWork, sender: str, texto: str, message_id: str = "") -> None:
-    """Process an incoming text message via the AI orchestrator."""
-    texto_lower = texto.strip().lower()
+async def procesar_texto(
+    uow: UnitOfWork,
+    sender: str,
+    texto: str,
+    message_id: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Process an incoming user message via the AI orchestrator."""
+    _start = time.monotonic()
+    logger.info("INCOMING user=%s preview=%s", sender, texto[:80])
 
-    # ── Hard-coded shortcuts bypass the LLM for speed / cost ─────────────
-    if texto_lower in {"menu", "menú", "inicio"}:
-        await enviar_menu_principal(uow, sender)
-        return
-
-    if texto_lower == ".":
-        await enviar_cards_mock(sender)
-        return
-
-    # ── AI layer ──────────────────────────────────────────────────────────
     if not get_settings().ai_enabled:
         await enviar_mensaje(sender, f"Recibido: {texto}")
         return
 
     orchestrator = _get_orchestrator()
     await enviar_typing(sender, message_id)
+
+    _alog.info("", "router.process", user_id=sender, message_length=len(texto))
     response = await orchestrator.process(
         user_id=sender,
         message=texto,
         db=uow._session,
+        metadata=metadata,
+    )
+    elapsed_ms = (time.monotonic() - _start) * 1000
+
+    logger.info(
+        "OUTGOING user=%s intent=%s confidence=%.2f elapsed=%.0fms msg_len=%d",
+        sender,
+        response.intent,
+        response.confidence,
+        elapsed_ms,
+        len(response.message),
+    )
+    _alog.info(
+        "", "router.response",
+        user_id=sender,
+        intent=response.intent,
+        confidence=response.confidence,
+        requires_action=response.requires_action,
+        elapsed_ms=round(elapsed_ms, 1),
+        response_preview=response.message[:120],
     )
     await enviar_mensaje(sender, response.message)

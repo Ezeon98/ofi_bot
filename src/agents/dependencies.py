@@ -7,6 +7,7 @@ No globals, no singletons reaching into tools directly.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,3 +23,4 @@ class AgentDependencies:
     user_id: str
     memory_service: MemoryService
     memory_config: MemoryConfig
+    current_message_metadata: dict[str, Any] | None = None

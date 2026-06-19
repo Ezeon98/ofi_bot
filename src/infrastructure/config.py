@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     tmp_dir: str = "/tmp/wpbase"
     base_url: str = "https://your-domain.com"
 
+    # ── Agent logging ─────────────────────────────────────────────────────
+    agent_logging_enabled: bool = True
+
     # ── Rate limiting ─────────────────────────────────────────────────────
     rate_limit: int = 20
     rate_window: int = 60

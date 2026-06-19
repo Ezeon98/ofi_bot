@@ -8,16 +8,26 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import re
+import unicodedata
 from typing import Any
 
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 
 from src.agents.dependencies import AgentDependencies
-from src.infrastructure.database.models import ProviderModel
+from src.infrastructure.database.models import ProviderModel, ProviderTradeModel, TradeModel
+from src.utils.geocoding import geocode_text_location
+from src.utils.agent_logger import AgentLogger
 
 logger = logging.getLogger(__name__)
+
+# Module-level AgentLogger, enabled by default. Its enabled flag is toggled
+# when it's bound to a turn_id via AgentDependencies (not needed here since
+# we log with the raw logger name "agent").
+_alog = AgentLogger(enabled=True)
 
 
 # ── Input schemas ────────────────────────────────────────────────────────────
@@ -25,9 +35,11 @@ logger = logging.getLogger(__name__)
 
 class BuscarPrestadoresInput(BaseModel):
     rubro: str = Field(description="Service category, e.g. 'plomero', 'electricista'")
-    zona: str | None = Field(default=None, description="Neighborhood or city area")
+    zona: str | None = Field(default=None, description="Neighborhood, city, or zone label")
+    lat: float | None = Field(default=None, description="Optional user latitude for ranking")
+    lon: float | None = Field(default=None, description="Optional user longitude for ranking")
     solo_verificados: bool = Field(default=False)
-    limit: int = Field(default=5, ge=1, le=10)
+    limit: int = Field(default=5, ge=3, le=5)
 
 
 class CrearPrestadorInput(BaseModel):
@@ -59,38 +71,121 @@ async def buscar_prestadores(
 
     Returns up to `limit` results, verified providers first.
     """
+    # ── Log search entry ──────────────────────────────────────────────
+    user_id = ctx.deps.user_id if hasattr(ctx.deps, "user_id") else "?"
+    logger.info(
+        "PROVIDER_SEARCH user=%s rubro=%r zona=%r lat=%r lon=%r solo_ver=%d limit=%d",
+        user_id, params.rubro, params.zona, params.lat, params.lon,
+        params.solo_verificados, params.limit,
+    )
+
+    origin_lat, origin_lon = await _resolve_search_origin(ctx.deps.current_message_metadata, params)
+
+    logger.info(
+        "PROVIDER_ORIGIN user=%s origin_lat=%r origin_lon=%r",
+        user_id, origin_lat, origin_lon,
+    )
+
     stmt = select(ProviderModel).where(ProviderModel.activo == True)  # noqa: E712
 
     if params.solo_verificados:
         stmt = stmt.where(ProviderModel.badge_activo == True)  # noqa: E712
 
-    if params.zona:
-        stmt = stmt.where(ProviderModel.zona.ilike(f"%{params.zona}%"))
+    use_text_zone_filter = _should_apply_text_zone_filter(params.zona, origin_lat, origin_lon)
+    logger.info(
+        "PROVIDER_FILTER user=%s use_text_zone=%s zona=%s",
+        user_id, use_text_zone_filter, params.zona,
+    )
+
+    if use_text_zone_filter:
+        zona_term = f"%{params.zona}%"
+        stmt = stmt.where(
+            or_(
+                ProviderModel.zona.ilike(zona_term),
+                ProviderModel.ciudad.ilike(zona_term),
+                ProviderModel.barrio.ilike(zona_term),
+            )
+        )
+
+    if params.rubro:
+        rubro_terms = _build_rubro_search_terms(params.rubro)
+        logger.info(
+            "PROVIDER_RUBRO user=%s rubro=%r rubro_terms=%s",
+            user_id, params.rubro, rubro_terms,
+        )
+        provider_ids_for_trade = (
+            select(ProviderTradeModel.provider_id)
+            .join(TradeModel, TradeModel.id == ProviderTradeModel.trade_id)
+            .where(
+                or_(
+                    *[
+                        clause
+                        for rubro_term in rubro_terms
+                        for clause in (
+                            TradeModel.nombre.ilike(rubro_term),
+                            TradeModel.slug.ilike(rubro_term),
+                        )
+                    ]
+                )
+            )
+        )
+        stmt = stmt.where(
+            or_(
+                ProviderModel.id.in_(provider_ids_for_trade),
+                *[ProviderModel.rubros.ilike(rubro_term) for rubro_term in rubro_terms],
+            )
+        )
 
     stmt = (
         stmt.order_by(
             ProviderModel.badge_activo.desc(),
             ProviderModel.plan.desc(),
         )
-        .limit(params.limit)
+        .limit(max(params.limit * 3, 15))  # (D) reduced from max(limit*5, 25)
     )
 
     rows = list(await ctx.deps.db.scalars(stmt))
+    logger.info(
+        "PROVIDER_RAW user=%s raw_count=%d",
+        user_id, len(rows),
+    )
+
+    # (A) Batch-load trade names for all matched providers in one query
+    provider_ids = [r.id for r in rows]
+    trade_names_by_provider = await _batch_provider_trade_names(ctx.deps.db, provider_ids)
+
     results = []
     for r in rows:
-        rubros = json.loads(r.rubros) if r.rubros else []
-        if any(params.rubro.lower() in rub.lower() for rub in rubros) or not rubros:
-            results.append(
-                {
-                    "nombre": r.nombre,
-                    "rubros": rubros,
-                    "zona": r.zona,
-                    "disponibilidad": r.disponibilidad,
-                    "badge_verificado": r.badge_activo,
-                    "facturacion": r.facturacion,
-                }
-            )
-    return results
+        rubros = trade_names_by_provider.get(r.id) or (
+            json.loads(r.rubros) if r.rubros else []
+        )
+        results.append(
+            {
+                "nombre": r.nombre,
+                "rubros": rubros,
+                "zona": r.zona,
+                "ciudad": r.ciudad,
+                "barrio": r.barrio,
+                "lat": r.lat,
+                "lon": r.lon,
+                "disponibilidad": r.disponibilidad,
+                "badge_verificado": r.badge_activo,
+                "facturacion": r.facturacion,
+                "distance_km": _distance_km(origin_lat, origin_lon, r.lat, r.lon),
+            }
+        )
+    results.sort(
+        key=lambda item: (
+            0 if item["badge_verificado"] else 1,
+            item["distance_km"] if item["distance_km"] is not None else float("inf"),
+        )
+    )
+    final = results[: params.limit]
+    logger.info(
+        "PROVIDER_RESULT user=%s final_count=%d names=%r",
+        user_id, len(final), [r["nombre"] for r in final],
+    )
+    return final
 
 
 async def crear_prestador(
@@ -176,11 +271,16 @@ async def consultar_prestador(
     )
     if row is None:
         return {"error": "No tenés un perfil de prestador registrado aún."}
+    rubros = await _provider_trade_names(ctx.deps.db, row.id, row.rubros)
     return {
         "id": row.id,
         "nombre": row.nombre,
-        "rubros": json.loads(row.rubros) if row.rubros else [],
+        "rubros": rubros,
         "zona": row.zona,
+        "ciudad": row.ciudad,
+        "barrio": row.barrio,
+        "lat": row.lat,
+        "lon": row.lon,
         "plan": row.plan,
         "badge_verificado": row.badge_activo,
         "activo": row.activo,
@@ -188,3 +288,266 @@ async def consultar_prestador(
         "experiencia": row.experiencia,
         "facturacion": row.facturacion,
     }
+
+
+async def _batch_provider_trade_names(
+    db: Any,
+    provider_ids: list[int],
+) -> dict[int, list[str]]:
+    """Load trade names for multiple providers in a single query.
+
+    Returns a dict mapping provider_id -> [trade_name, ...].
+    Providers without trade links get an empty list.
+    """
+    if not provider_ids:
+        return {}
+
+    rows = await db.execute(
+        select(ProviderTradeModel.provider_id, TradeModel.nombre)
+        .join(TradeModel, TradeModel.id == ProviderTradeModel.trade_id)
+        .where(ProviderTradeModel.provider_id.in_(provider_ids))
+        .order_by(TradeModel.nombre.asc())
+    )
+    result: dict[int, list[str]] = {pid: [] for pid in provider_ids}
+    for pid, name in rows:
+        result.setdefault(pid, []).append(name)
+    return result
+
+
+async def _provider_trade_names(db: Any, provider_id: int, rubros_json: str) -> list[str]:
+    """Return normalized trade names, falling back to the legacy rubros cache.
+
+    Used for single-provider lookups (e.g. consultar_prestador).
+    For batch lookups use _batch_provider_trade_names.
+    """
+    rows = await db.execute(
+        select(TradeModel.nombre)
+        .join(ProviderTradeModel, ProviderTradeModel.trade_id == TradeModel.id)
+        .where(ProviderTradeModel.provider_id == provider_id)
+        .order_by(TradeModel.nombre.asc())
+    )
+    trade_names = list(rows.scalars())
+    if trade_names:
+        return trade_names
+    return json.loads(rubros_json) if rubros_json else []
+
+
+async def _resolve_search_origin(
+    metadata: dict[str, Any] | None,
+    params: BuscarPrestadoresInput,
+) -> tuple[float | None, float | None]:
+    """Pick the best available search origin for distance ranking."""
+    if params.lat is not None and params.lon is not None:
+        return params.lat, params.lon
+    if not metadata:
+        if params.zona:
+            geocoded = await geocode_text_location(params.zona)
+            latitude = geocoded.get("lat")
+            longitude = geocoded.get("lon")
+            if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
+                return float(latitude), float(longitude)
+        return None, None
+    latitude = metadata.get("latitude")
+    longitude = metadata.get("longitude")
+    if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
+        return float(latitude), float(longitude)
+    if params.zona:
+        geocoded = await geocode_text_location(params.zona)
+        latitude = geocoded.get("lat")
+        longitude = geocoded.get("lon")
+        if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
+            return float(latitude), float(longitude)
+    return None, None
+
+
+def _should_apply_text_zone_filter(
+    zona: str | None,
+    origin_lat: float | None,
+    origin_lon: float | None,
+) -> bool:
+    """Use textual zone filtering only when no coordinate origin is available."""
+    return bool(zona) and origin_lat is None and origin_lon is None
+
+
+def _build_rubro_search_terms(rubro: str) -> list[str]:
+    """Build LIKE patterns that cover common oficio vs. rubro label variants.
+
+    Uses synonym expansion so that e.g. "electricista" generates terms that
+    also match "Electricidad" in the database.
+    """
+    return _expand_rubro_synonyms(rubro)
+
+
+def _normalize_rubro_text(text: str) -> str:
+    """Lowercase and strip accents so oficio comparisons are more tolerant."""
+    normalized = unicodedata.normalize("NFKD", text)
+    without_marks = "".join(char for char in normalized if not unicodedata.combining(char))
+    return re.sub(r"\s+", " ", without_marks.strip().lower())
+
+
+# ── Trade/Ofício synonym map ─────────────────────────────────────────────────
+# Maps common user queries to DB-compatible search stems so that, e.g.,
+# "electricista" matches providers who registered with rubro "Electricidad".
+_TRADE_SYNONYM_STEMS: dict[str, tuple[str, ...]] = {
+    # electricidad / electricista
+    "electric": ("electricid", "electricist", "electric"),
+    # gas / gasista
+    "gas": ("gasist", "gas"),
+    # plomero / plomeria / plomera
+    "plomer": ("plomer"),
+    # cerrajero / cerrajeria
+    "cerraj": ("cerrajer", "cerraj"),
+    # albañil / albañileria
+    "albañil": ("albañil"),
+    "albanni": ("albannil"),
+    # pintor / pintura
+    "pintor": ("pint"),
+    "pintur": ("pint"),
+    # herrero / herreria
+    "herr": ("herr"),
+    # carpintero / carpinteria
+    "carpinter": ("carpinter"),
+    # jardinero / jardineria
+    "jardin": ("jardin"),
+    # fontanero / fontaneria
+    "fontan": ("fontan"),
+    # cocinero / cocina
+    "cocin": ("cocin"),
+    # profesor / profesorado
+    "profesor": ("profesor"),
+    # abogado / abogacia
+    "abog": ("abog"),
+    # contador / contaduria
+    "contador": ("contador"),
+    # medico / medicina
+    "medic": ("medic"),
+    # enfermero / enfermeria
+    "enfermer": ("enfermer"),
+    # veterinario / veterinaria
+    "veterinari": ("veterinari"),
+    # ingeniero / ingenieria
+    "ingenier": ("ingenier"),
+    # arquitecto / arquitectura
+    "arquitect": ("arquitect"),
+    # tecnico / tecnica
+    "tecnic": ("tecnic"),
+    # reparador / reparacion
+    "repar": ("repar"),
+    # limpieza / limpiador
+    "limpi": ("limpi"),
+    # cuidado / cuidador
+    "cuidad": ("cuidad"),
+    # mascota / paseador
+    "mascot": ("mascot"),
+    # seguridad / vigilador
+    "segur": ("segur"),
+    # profesor / maestro
+    "profes": ("profes"),
+    # traductor / traduccion
+    "traductor": ("traductor"),
+    "traduccion": ("traduccion"),
+    # chofer / transporte
+    "chofer": ("chofer"),
+    "conduct": ("conduct"),
+    "transport": ("transport"),
+    # flete / mudanza
+    "flet": ("flet"),
+    "mudanz": ("mudanz"),
+    "mudanza": ("mudanza"),
+    # niñero / niñera / niñera
+    "niñer": ("niñer"),
+    "ninier": ("ninier"),
+}
+
+
+def _profession_stem(word: str) -> str | None:
+    """Return a broad stem for oficio nouns.
+
+    Handles common Spanish profession suffixes and also returns a SYNONYM
+    expansion so that, e.g., "electricista" also generates "electricid" which
+    matches the DB rubro "Electricidad".
+    """
+    if len(word) < 4:
+        return None
+
+    # Try to find a known synonym stem by matching the first N characters
+    for stem, expansions in _TRADE_SYNONYM_STEMS.items():
+        if word.startswith(stem):
+            return expansions[0]
+        # Also check if any expansion starts with the word
+        for exp in expansions:
+            if exp.startswith(word) or word.startswith(exp):
+                return exp
+
+    # Suffix-based fallback
+    if word.endswith(("ero", "era", "eria")):
+        # plomero -> plomer, plomeria -> plomer
+        return word[:-1] if not word.endswith("eria") else word[:-2]
+    if word.endswith(("ista", "ista")):
+        # electricista -> electricist (also handles gasista, etc.)
+        return word[:-4] if len(word) > 5 else None
+    if word.endswith(("dor", "dora", "tor", "tora")):
+        # reparador -> reparador
+        # removedor -> removedor
+        return word[:-2] if len(word) > 5 else None
+    if word.endswith(("nte", "nte")):
+        # estudiante, auxiliante -> estudiant, auxiliant
+        return word[:-2] if len(word) > 5 else None
+
+    return None
+
+
+def _expand_rubro_synonyms(rubro: str) -> list[str]:
+    """Generate all known synonym variants for a given rubro search term.
+
+    E.g. "electricista" → ["%electricista%", "%electricist%", "%electricidad%", "%electric%"]
+    """
+    normalized = _normalize_rubro_text(rubro)
+    expanded: set[str] = set()
+
+    # 1. The original normalized text
+    if normalized:
+        expanded.add(normalized)
+
+    # 2. Each individual token
+    for token in normalized.split():
+        expanded.add(token)
+        stem = _profession_stem(token)
+        if stem and stem != token:
+            expanded.add(stem)
+
+        # 3. Synonym expansions from the trade map
+        for key, expansions in _TRADE_SYNONYM_STEMS.items():
+            if token.startswith(key) or (stem and stem.startswith(key)):
+                for exp in expansions:
+                    expanded.add(exp)
+            # Reverse: also check if the key starts with the token
+            if key.startswith(token):
+                for exp in expansions:
+                    expanded.add(exp)
+
+    return [f"%{t}%" for t in expanded if t]
+
+
+def _distance_km(
+    origin_lat: float | None,
+    origin_lon: float | None,
+    target_lat: float | None,
+    target_lon: float | None,
+) -> float | None:
+    """Compute the distance between two coordinates when both are available."""
+    if None in {origin_lat, origin_lon, target_lat, target_lon}:
+        return None
+
+    earth_radius_km = 6371.0
+    lat1 = math.radians(float(origin_lat))
+    lon1 = math.radians(float(origin_lon))
+    lat2 = math.radians(float(target_lat))
+    lon2 = math.radians(float(target_lon))
+    delta_lat = lat2 - lat1
+    delta_lon = lon2 - lon1
+    haversine = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lon / 2) ** 2
+    )
+    return earth_radius_km * 2 * math.asin(math.sqrt(haversine))
