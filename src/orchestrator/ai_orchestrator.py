@@ -26,78 +26,42 @@ from __future__ import annotations
 import logging
 import re
 import time
+import urllib.parse
 from types import SimpleNamespace
 from typing import Any
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.dependencies import AgentDependencies
-from src.agents.models.response import AgentResponse, Intent
+from src.agents.models.response import AgentResponse, Intent, Message, MessageAction
 from src.agents.router_agent import router_agent
 from src.context.builder import ContextBuilder
 from src.infrastructure.config import Settings
-from src.infrastructure.database.repositories.estado import EstadoRepository
 from src.memory.extractor import MemoryExtractor
 from src.memory.models import MemoryConfig
 from src.memory.schemas import MemoryRead
 from src.memory.service import MemoryService
 from src.memory.summarizer import MemorySummarizer
-from src.tools.business.providers import BuscarPrestadoresInput, buscar_prestadores
+from src.application.services.provider_search_service import ProviderSearchService
 from src.tools.business.search_state import SEARCH_STATE_NAME
 from src.utils.agent_logger import AgentLogger
-from src.utils.geocoding import geocode_text_location
 
 logger = logging.getLogger(__name__)
-
-LOCATION_MEMORY_KEYS = {
-    "lat": "search_latitude",
-    "lon": "search_longitude",
-    "ciudad": "search_ciudad",
-    "barrio": "search_barrio",
-    "zona": "search_zona",
-}
-SEARCH_BUTTON_ID = "post_terms_seek_services"
-SEARCH_PREFIXES = (
-    "necesito un ",
-    "necesito una ",
-    "necesito ",
-    "busco un ",
-    "busco una ",
-    "busco ",
-    "quiero contratar un ",
-    "quiero contratar una ",
-    "quiero un ",
-    "quiero una ",
-    "preciso un ",
-    "preciso una ",
-    "preciso ",
-    "me hace falta un ",
-    "me hace falta una ",
-    "me hace falta ",
-)
-SEARCH_FOLLOWUP_STOPWORDS = {
-    "urgente",
-    "urgentemente",
-    "rápido",
-    "rapido",
-    "hoy",
-    "ahora",
-    "ya",
-}
-ZONE_REPLY_PREFIXES = (
-    "mi ubicacion es ",
-    "mi ubicación es ",
-    "estoy en ",
-    "vivo en ",
-)
 
 
 class OrchestratorResponse(BaseModel):
     """What the bot layer receives — channel-agnostic."""
 
     message: str
+    messages: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Additional messages to send individually. Each dict has a 'text' key "
+            "and optionally an 'action' key with 'type', 'label', 'url'."
+        ),
+    )
     intent: str
     confidence: float
     entities: dict[str, Any] | None = None
@@ -124,6 +88,10 @@ class AIOrchestrator:
         self._openai = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
         self._context_builder = ContextBuilder(max_tokens=self._memory_config.max_tokens)
         self._alog = AgentLogger(enabled=settings.agent_logging_enabled)
+        self._provider_search = ProviderSearchService(
+            memory_config=self._memory_config,
+            agent_logger=self._alog,
+        )
 
     async def process(
         self,
@@ -147,7 +115,7 @@ class AIOrchestrator:
         )
 
         memory_service = self._build_memory_service(db)
-        await self._store_search_location_if_available(
+        await self._provider_search.store_search_location_if_available(
             memory_service,
             user_id,
             metadata,
@@ -190,7 +158,7 @@ class AIOrchestrator:
         )
 
         # ── 4b. Guided-search shortcut ────────────────────────────────────
-        shortcut_response = await self._maybe_handle_guided_search(
+        shortcut_response = await self._provider_search.maybe_handle_guided_search(
             user_id=user_id,
             message=message,
             deps=deps,
@@ -259,7 +227,13 @@ class AIOrchestrator:
             )
             return self._to_orchestrator_response(agent_response)
 
-        # ── 6-8. Post-process + persist ───────────────────────────────────
+        # ── 6-7. Post-process agent response (reformat providers into multi-message) ──
+        agent_response = await self._provider_search.maybe_reformat_provider_response(
+            agent_response,
+            rubro=agent_response.entities.get("rubro") if agent_response.entities else None,
+        )
+
+        # ── 8. Persist ────────────────────────────────────────────────────
         try:
             if context.conversation_id is not None:
                 await memory_service.process_interaction(
@@ -300,6 +274,17 @@ class AIOrchestrator:
         """Translate the agent output contract into the bot-facing response contract."""
         return OrchestratorResponse(
             message=agent_response.message,
+            messages=[
+                {
+                    "text": m.text,
+                    "action": (
+                        {"type": m.action.type, "label": m.action.label, "url": m.action.url}
+                        if m.action
+                        else None
+                    ),
+                }
+                for m in agent_response.messages
+            ],
             intent=agent_response.intent.value,
             confidence=agent_response.confidence,
             entities=agent_response.entities,
@@ -481,14 +466,50 @@ class AIOrchestrator:
             )
 
         location_label = self._location_label(location) or "tu ubicación"
+        first_message, messages = self._format_provider_results(
+            rubro, location_label, providers, params.mensaje_contacto
+        )
         return AgentResponse(
             intent=Intent.BUSCAR_SERVICIO,
-            message=self._format_provider_results(rubro, location_label, providers),
+            message=first_message,
+            messages=messages,
             confidence=1.0,
             entities={"rubro": rubro, "zona": location_label, "detalle": detail},
             requires_action=True,
             metadata={"providers": providers},
         )
+
+    @staticmethod
+    async def _maybe_reformat_provider_response(
+        agent_response: AgentResponse,
+        rubro: str | None = None,
+    ) -> AgentResponse:
+        """If the agent's metadata contains 'providers', reformat into individual messages.
+
+        This ensures that when the LLM returns provider results (instead of the shortcut),
+        each provider is still sent as a separate message with a contact button.
+        """
+        if not agent_response.metadata or "providers" not in agent_response.metadata:
+            return agent_response
+
+        providers = agent_response.metadata["providers"]
+        if not providers or len(agent_response.messages) > 0:
+            # Already has messages or no providers — skip
+            return agent_response
+
+        effective_rubro = rubro or (agent_response.entities.get("rubro") if agent_response.entities else None) or "prestadores"
+        location_label = (agent_response.entities.get("zona") if agent_response.entities else None) or "tu ubicación"
+
+        first_message, messages = AIOrchestrator._format_provider_results(
+            effective_rubro, location_label, providers,
+        )
+
+        # Keep the original message as the first message, add provider messages
+        agent_response.messages = messages
+        if first_message:
+            agent_response.message = first_message
+
+        return agent_response
 
     @staticmethod
     async def _enrich_location_with_coords(
@@ -740,30 +761,45 @@ class AIOrchestrator:
         rubro: str,
         location_label: str,
         providers: list[dict[str, Any]],
-    ) -> str:
-        """Render the provider shortlist for WhatsApp-friendly delivery."""
-        lines = [f"Encontré hasta 5 {rubro} cerca de {location_label}:"]
-        for index, provider in enumerate(providers[:5], start=1):
-            rubros = ", ".join(provider.get("rubros") or [])
-            zone_parts = [provider.get("barrio"), provider.get("ciudad"), provider.get("zona")]
-            zone = next(
-                (
-                    part
-                    for part in zone_parts
-                    if isinstance(part, str) and part
-                ),
-                "Zona no informada",
-            )
-            verified = "Verificado" if provider.get("badge_verificado") else "Base"
+        mensaje_contacto: str = "Hola, te contacto por ServiMatch para consultar sobre tus servicios.",
+    ) -> tuple[str, list[Message]]:
+        """Render the provider shortlist as individual messages with contact buttons.
+
+        Returns:
+            Tuple of (first_message_text, list_of_Message_objects_with_actions).
+        """
+        count = len(providers)
+        first_message = f"Encontré {count} {rubro} cerca de {location_label}:"
+
+        messages: list[Message] = []
+        for provider in providers:
+            rubros_list = provider.get("rubros") or []
+            rubros_str = ", ".join(rubros_list) if rubros_list else rubro
+
+            # Build provider detail text
+            lines = [f"👤 {provider['nombre']}"]
+            if rubros_str:
+                lines.append(f"🔧 {rubros_str}")
+            if provider.get("badge_verificado"):
+                lines.append("✅ Verificado")
+            zone = provider.get("barrio") or provider.get("ciudad") or provider.get("zona") or ""
+            if zone:
+                lines.append(f"📍 {zone}")
             distance = provider.get("distance_km")
-            distance_text = (
-                f" - {distance:.1f} km" if isinstance(distance, (int, float)) else ""
-            )
-            lines.append(
-                f"{index}. {provider['nombre']} | {rubros or rubro} | {zone} | "
-                f"{verified}{distance_text}"
-            )
-        return "\n".join(lines)
+            if isinstance(distance, (int, float)):
+                lines.append(f"📏 {distance:.1f} km")
+            text = "\n".join(lines)
+
+            # Build wa.me link for contact button
+            telefono = provider.get("telefono")
+            action: MessageAction | None = None
+            if telefono:
+                wa_url = f"https://wa.me/{telefono}?text={urllib.parse.quote(mensaje_contacto)}"
+                action = MessageAction(type="cta_url", label="Contactar", url=wa_url)
+
+            messages.append(Message(text=text, action=action))
+
+        return first_message, messages
 
     @staticmethod
     def _normalize_message(message: str) -> str:

@@ -15,7 +15,6 @@ import hmac
 import logging
 from datetime import datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, Query, Request
@@ -23,7 +22,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.utils.timezone import now_ar
+from src.utils.timezone import now_ar, TZ_AR
 
 from src.application.services.subscription_service import (
     create_subscription,
@@ -40,8 +39,6 @@ router = APIRouter()
 
 settings = get_settings()
 
-_TZ_AR = ZoneInfo("America/Argentina/Buenos_Aires")
-
 
 def _parse_mp_datetime(value: str | None) -> datetime | None:
     """Parse an MP ISO datetime and return tz-naive Argentina dt."""
@@ -50,7 +47,7 @@ def _parse_mp_datetime(value: str | None) -> datetime | None:
     try:
         dt = datetime.fromisoformat(value)
         if dt.tzinfo is not None:
-            dt = dt.astimezone(_TZ_AR).replace(tzinfo=None)
+            dt = dt.astimezone(TZ_AR).replace(tzinfo=None)
         return dt
     except (ValueError, TypeError):
         return None

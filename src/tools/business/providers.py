@@ -18,7 +18,12 @@ from pydantic_ai import RunContext
 from sqlalchemy import or_, select, update
 
 from src.agents.dependencies import AgentDependencies
-from src.infrastructure.database.models import ProviderModel, ProviderTradeModel, TradeModel
+from src.infrastructure.database.models import (
+    ProviderModel,
+    ProviderTradeModel,
+    TradeModel,
+    UsuarioModel,
+)
 from src.utils.geocoding import geocode_text_location
 from src.utils.agent_logger import AgentLogger
 
@@ -40,6 +45,10 @@ class BuscarPrestadoresInput(BaseModel):
     lon: float | None = Field(default=None, description="Optional user longitude for ranking")
     solo_verificados: bool = Field(default=False)
     limit: int = Field(default=5, ge=3, le=5)
+    mensaje_contacto: str = Field(
+        default="Hola, te contacto por ServiMatch para consultar sobre tus servicios.",
+        description="Predefined message sent when the user taps 'Contactar'",
+    )
 
 
 class CrearPrestadorInput(BaseModel):
@@ -86,7 +95,11 @@ async def buscar_prestadores(
         user_id, origin_lat, origin_lon,
     )
 
-    stmt = select(ProviderModel).where(ProviderModel.activo == True)  # noqa: E712
+    stmt = (
+        select(ProviderModel, UsuarioModel.telefono)
+        .join(UsuarioModel, UsuarioModel.id == ProviderModel.usuario_id)
+        .where(ProviderModel.activo == True)  # noqa: E712
+    )
 
     if params.solo_verificados:
         stmt = stmt.where(ProviderModel.badge_activo == True)  # noqa: E712
@@ -144,18 +157,22 @@ async def buscar_prestadores(
         .limit(max(params.limit * 3, 15))  # (D) reduced from max(limit*5, 25)
     )
 
-    rows = list(await ctx.deps.db.scalars(stmt))
+    rows = list(await ctx.deps.db.execute(stmt))
     logger.info(
         "PROVIDER_RAW user=%s raw_count=%d",
         user_id, len(rows),
     )
 
+    # Extract ProviderModel instances and telefono from the joined result
+    provider_rows = [r[0] for r in rows]
+    telefono_map = {r[0].id: r[1] for r in rows}
+
     # (A) Batch-load trade names for all matched providers in one query
-    provider_ids = [r.id for r in rows]
+    provider_ids = [r.id for r in provider_rows]
     trade_names_by_provider = await _batch_provider_trade_names(ctx.deps.db, provider_ids)
 
     results = []
-    for r in rows:
+    for r in provider_rows:
         rubros = trade_names_by_provider.get(r.id) or (
             json.loads(r.rubros) if r.rubros else []
         )
@@ -168,6 +185,7 @@ async def buscar_prestadores(
                 "barrio": r.barrio,
                 "lat": r.lat,
                 "lon": r.lon,
+                "telefono": telefono_map.get(r.id),
                 "disponibilidad": r.disponibilidad,
                 "badge_verificado": r.badge_activo,
                 "facturacion": r.facturacion,

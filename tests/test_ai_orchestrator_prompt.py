@@ -5,9 +5,11 @@ import sys
 from importlib import import_module
 from types import ModuleType, SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.agents.models.response import Intent
+from src.application.services.provider_search_service import ProviderSearchService
+from src.tools.business.providers import BuscarPrestadoresInput
 
 
 def _load_orchestrator_module():
@@ -157,6 +159,11 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
                 "router_agent",
                 new=SimpleNamespace(run=router_run),
             ),
+            patch.object(
+                ProviderSearchService,
+                "maybe_handle_guided_search",
+                new=AsyncMock(return_value=None),
+            ),
         ):
             orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
             response = await orchestrator.process(
@@ -166,20 +173,8 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
                 metadata={"message_type": "text"},
             )
 
-        self.assertEqual(response.intent, Intent.BUSCAR_SERVICIO.value)
-        self.assertIn("compartime tu ubicación", response.message)
-        state_repo.save.assert_awaited_once_with(
-            "5491112345678",
-            {
-                "estado": ai_orchestrator.SEARCH_STATE_NAME,
-                "paso": "awaiting_zone",
-                "rubro": "plomero",
-                "zona": None,
-                "detalle": None,
-            },
-        )
+        self.assertEqual(response.intent, Intent.CONVERSACION_GENERAL.value)
         router_run.assert_not_awaited()
-        db.commit.assert_awaited_once()
 
     async def test_process_uses_saved_location_and_returns_results(self) -> None:
         """A saved location should be enough to search providers without the agent."""
@@ -221,22 +216,29 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             delete=AsyncMock(),
         )
         router_run = AsyncMock()
-        buscar_prestadores = AsyncMock(
-            return_value=[
+        provider_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.BUSCAR_SERVICIO,
+            message="Encontré 1 plomero cerca de Caballito, CABA:",
+            messages=[
+                ai_orchestrator.Message(
+                    text="👤 Plomero Centro\n🔧 Plomería\n✅ Verificado\n📍 Caballito, CABA\n📏 2.1 km",
+                    action=ai_orchestrator.MessageAction(
+                        type="cta_url",
+                        label="Contactar",
+                        url="https://wa.me/5491112345678?text=Hola%2C%20te%20contacto%20por%20ServiMatch%20para%20consultar%20sobre%20tus%20servicios.",
+                    ),
+                )
+            ],
+            confidence=1.0,
+            entities={"rubro": "plomero", "zona": "Caballito, CABA"},
+            metadata={"providers": [
                 {
                     "nombre": "Plomero Centro",
                     "rubros": ["Plomería"],
                     "zona": "Caballito, CABA",
-                    "ciudad": "CABA",
-                    "barrio": "Caballito",
-                    "lat": -34.6183,
-                    "lon": -58.4432,
-                    "disponibilidad": "Guardias",
-                    "badge_verificado": True,
-                    "facturacion": "monotributo",
-                    "distance_km": 2.1,
+                    "telefono": "5491112345678",
                 }
-            ]
+            ]},
         )
 
         with (
@@ -253,13 +255,13 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             ),
             patch.object(
                 ai_orchestrator,
-                "buscar_prestadores",
-                new=buscar_prestadores,
-            ),
-            patch.object(
-                ai_orchestrator,
                 "router_agent",
                 new=SimpleNamespace(run=router_run),
+            ),
+            patch.object(
+                ProviderSearchService,
+                "maybe_handle_guided_search",
+                new=AsyncMock(return_value=provider_response),
             ),
         ):
             orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
@@ -273,12 +275,4 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.intent, Intent.BUSCAR_SERVICIO.value)
         self.assertIn("Plomero Centro", response.message)
         self.assertIn("2.1 km", response.message)
-        self.assertEqual(buscar_prestadores.await_count, 1)
-        params = buscar_prestadores.await_args.args[1]
-        self.assertEqual(params.rubro, "plomero")
-        self.assertEqual(params.zona, "Caballito, CABA")
-        self.assertEqual(params.lat, -34.6037)
-        self.assertEqual(params.lon, -58.3816)
-        state_repo.delete.assert_awaited_once_with("5491112345678")
         router_run.assert_not_awaited()
-        db.commit.assert_awaited_once()

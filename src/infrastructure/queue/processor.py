@@ -1,55 +1,29 @@
-"""FastAPI application — webhook entry point for WhatsApp Business Cloud API."""
+"""Shared webhook message processing logic used by both the FastAPI app and the arq worker."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import time
-from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import redis
-from arq import create_pool
-from arq.connections import RedisSettings
-from fastapi import Depends, FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.infrastructure.config import get_settings
 from src.infrastructure.container import UnitOfWork
-from src.infrastructure.database.session import get_session
+from src.infrastructure.database.session import get_session_factory
 from src.infrastructure.external.whatsapp_client import enviar_mensaje
-from src.infrastructure.queue.processor import process_webhook_entries
-from src.presentation.api.subscriptions import router as subscriptions_router
+from src.presentation.bot.handlers.location import reverse_geocode_location
 from src.presentation.bot.router import procesar_texto
+from src.presentation.bot.terms_gate import (
+    POST_TERMS_OFFER_SERVICES_BUTTON_ID,
+    POST_TERMS_SEEK_SERVICES_BUTTON_ID,
+    handle_terms_gate,
+    send_post_terms_service_choice,
+)
 from src.utils.rate_limiter import check_rate_limit
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
-
-# ── Logging setup ─────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-for _noisy in ("sqlalchemy", "httpx", "httpcore", "asyncpg", "watchfiles"):
-    logging.getLogger(_noisy).setLevel(logging.WARNING)
-
-# Dedicated handler for the "agent" logger — outputs JSON lines to a separate
-# file so you can tail/filter agent decisions independently.
-_agent_logger = logging.getLogger("agent")
-_agent_logger.setLevel(logging.INFO if settings.agent_logging_enabled else logging.WARNING)
-_agent_handler = logging.FileHandler(
-    os.path.join(os.path.dirname(settings.tmp_dir), "agent.log"),
-    encoding="utf-8",
-)
-_agent_handler.setFormatter(logging.Formatter("%(message)s"))
-_agent_logger.propagate = False
-_agent_logger.addHandler(_agent_handler)
 
 # ── Deduplication via Redis ───────────────────────────────────────────────────
 redis_client = redis.Redis(
@@ -57,19 +31,6 @@ redis_client = redis.Redis(
     port=int(os.getenv("REDIS_PORT", 6379)),
     decode_responses=True,
 )
-
-# ── Job queue (arq) ──────────────────────────────────────────────────────────
-_arq_pool = None
-
-
-async def get_arq_pool():
-    global _arq_pool
-    if _arq_pool is None:
-        _arq_pool = await create_pool(RedisSettings(
-            host=os.getenv("REDIS_HOST", "localhost"),
-            port=int(os.getenv("REDIS_PORT", 6379)),
-        ))
-    return _arq_pool
 
 
 def is_duplicate(msg_id: str) -> bool:
@@ -86,97 +47,23 @@ def is_old_message(message_timestamp: int) -> bool:
     return time.time() - message_timestamp > 600  # 10 min
 
 
-# ── Lifespan ──────────────────────────────────────────────────────────────────
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    os.makedirs(settings.tmp_dir, exist_ok=True)
-    from src.schedulers.scheduler import iniciar_scheduler
+async def process_webhook_entries(body: dict) -> None:
+    """Process all messages in a WhatsApp webhook payload.
 
-    scheduler = iniciar_scheduler()
-    logger.info("Scheduler started via lifespan")
-    yield
-    scheduler.shutdown(wait=False)
-    logger.info("Scheduler stopped via lifespan")
-
-
-app = FastAPI(title="WhatsApp Bot", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
-)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount(
-    "/suscripcion/assets",
-    StaticFiles(directory="frontend"),
-    name="frontend-assets",
-)
-app.include_router(subscriptions_router, tags=["subscriptions"])
-
-
-# ── Serve frontend subscription page ─────────────────────────────────────────
-@app.get("/suscripcion", response_model=None)
-async def serve_subscription_page() -> Response:
-    """Return the CardForm-based subscription frontend."""
-    import pathlib
-
-    html_path = pathlib.Path("frontend/index.html")
-    if not html_path.exists():
-        return JSONResponse(status_code=404, content={"detail": "Frontend not found."})
-    return Response(
-        content=html_path.read_text(encoding="utf-8"),
-        media_type="text/html",
-    )
-
-
-# ── Dependency ────────────────────────────────────────────────────────────────
-async def get_uow(session: AsyncSession = Depends(get_session)) -> UnitOfWork:
-    return UnitOfWork(session)
-
-
-# ── Webhook verification ──────────────────────────────────────────────────────
-@app.get("/wp_webhook", response_model=None)
-async def verify_webhook(request: Request) -> Response:
-    params = request.query_params
-    mode = params.get("hub.mode")
-    token = params.get("hub.verify_token")
-    challenge = params.get("hub.challenge")
-    if mode == "subscribe" and token == settings.verify_token:
-        logger.info("Webhook verificado correctamente")
-        return Response(content=challenge, media_type="text/plain")
-    return JSONResponse(status_code=403, content={"error": "Token inválido"})
-
-
-# ── Incoming messages ─────────────────────────────────────────────────────────
-@app.post("/wp_webhook")
-async def webhook(request: Request) -> dict[str, str]:
-    body = await request.json()
-    if body.get("object") != "whatsapp_business_account":
-        return {"status": "ignored"}
-
-    pool = await get_arq_pool()
-    await pool.enqueue_job("process_webhook", body)
-    return {"status": "ok"}
-
-
-async def _process_webhook_body(body: dict) -> None:
-    """Process webhook payload in background with its own DB session."""
-    from src.infrastructure.database.session import get_session_factory
-
+    Used by both the inline FastAPI handler and the arq worker.
+    """
     factory = get_session_factory()
     async with factory() as session:
         try:
             uow = UnitOfWork(session)
-            await _handle_webhook_entries(uow, body)
+            await _handle_entries(uow, body)
             await session.commit()
         except Exception:
             await session.rollback()
             raise
 
 
-async def _handle_webhook_entries(uow: UnitOfWork, body: dict) -> None:
-    """Iterate webhook entries and process each message."""
+async def _handle_entries(uow: UnitOfWork, body: dict) -> None:
     for entry in body.get("entry", []):
         for change in entry.get("changes", []):
             value = change.get("value", {})
@@ -210,7 +97,6 @@ async def _handle_webhook_entries(uow: UnitOfWork, body: dict) -> None:
                     continue
 
                 try:
-                    # Resolve sender (BSUID migration support)
                     sender, usuario = await uow.usuarios.resolve_sender(sender, bsuid)
                     if not usuario:
                         await uow.usuarios.create(sender, bsuid)

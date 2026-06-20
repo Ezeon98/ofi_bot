@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from src.infrastructure.config import get_settings
+from src.utils.timezone import TZ_AR
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +66,10 @@ class MercadoPagoService:
         if not plan_id:
             plan_id = get_settings().mp_plan_id
 
-        tz_ar = ZoneInfo("America/Argentina/Buenos_Aires")
         if confirmation_time.tzinfo is None:
-            confirm_ar = confirmation_time.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz_ar)
+            confirm_ar = confirmation_time.replace(tzinfo=ZoneInfo("UTC")).astimezone(TZ_AR)
         else:
-            confirm_ar = confirmation_time.astimezone(tz_ar)
+            confirm_ar = confirmation_time.astimezone(TZ_AR)
 
         earliest = confirm_ar - timedelta(minutes=max_minutes)
 
@@ -84,7 +84,7 @@ class MercadoPagoService:
                 continue
             try:
                 created_dt = datetime.fromisoformat(created_str)
-                created_ar = created_dt.astimezone(tz_ar)
+                created_ar = created_dt.astimezone(TZ_AR)
             except (ValueError, TypeError):
                 continue
 
@@ -109,11 +109,10 @@ class MercadoPagoService:
         if not plan_id:
             plan_id = get_settings().mp_plan_id
 
-        tz_ar = ZoneInfo("America/Argentina/Buenos_Aires")
         if since.tzinfo is None:
-            since_ar = since.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz_ar)
+            since_ar = since.replace(tzinfo=ZoneInfo("UTC")).astimezone(TZ_AR)
         else:
-            since_ar = since.astimezone(tz_ar)
+            since_ar = since.astimezone(TZ_AR)
 
         results = await self.search_subscriptions(
             preapproval_plan_id=plan_id,
@@ -127,7 +126,7 @@ class MercadoPagoService:
                 continue
             try:
                 created_dt = datetime.fromisoformat(created_str)
-                created_ar = created_dt.astimezone(tz_ar)
+                created_ar = created_dt.astimezone(TZ_AR)
                 if created_ar >= since_ar:
                     return sub
             except (ValueError, TypeError):

@@ -8,7 +8,7 @@ from typing import Any
 
 from src.infrastructure.config import get_settings
 from src.infrastructure.container import UnitOfWork
-from src.infrastructure.external.whatsapp_client import enviar_mensaje, enviar_typing
+from src.infrastructure.external.whatsapp_client import enviar_mensaje, enviar_typing, enviar_boton_cta
 from src.orchestrator.ai_orchestrator import AIOrchestrator
 from src.utils.agent_logger import AgentLogger
 
@@ -72,4 +72,19 @@ async def procesar_texto(
         elapsed_ms=round(elapsed_ms, 1),
         response_preview=response.message[:120],
     )
+    # ── Send the primary message ───────────────────────────────────────
     await enviar_mensaje(sender, response.message)
+
+    # ── Send additional messages (one per provider with optional contact button) ──
+    for msg in response.messages:
+        text = msg.get("text", "")
+        action = msg.get("action")
+        if action and action.get("type") == "cta_url":
+            await enviar_boton_cta(
+                sender,
+                body_text=text,
+                display_text=action["label"],
+                url=action["url"],
+            )
+        else:
+            await enviar_mensaje(sender, text)
