@@ -141,7 +141,7 @@ class RouterShortcutTests(IsolatedAsyncioTestCase):
                     ],
                     intent=Intent.BUSCAR_SERVICIO.value,
                     confidence=1.0,
-                    entities={"rubro": "electricista", "zona": "Centro"},
+                    entities={"rubro": "electricista", "barrio": "Centro"},
                     requires_action=True,
                     metadata=None,
                 )

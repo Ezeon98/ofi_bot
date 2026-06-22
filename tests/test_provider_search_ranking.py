@@ -29,7 +29,6 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             id=1,
             nombre="Juan Plomero",
             rubros='["Plomeria"]',
-            zona="Palermo, CABA",
             ciudad="CABA",
             barrio="Palermo",
             lat=-34.5875,
@@ -60,7 +59,7 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
         ):
             results = await providers.buscar_prestadores(
                 ctx,
-                providers.BuscarPrestadoresInput(rubro="plomero", zona="Palermo", limit=3),
+                providers.BuscarPrestadoresInput(rubro="plomero", barrio="Palermo", limit=3),
             )
 
         self.assertEqual(len(results), 1)
@@ -72,7 +71,6 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             id=1,
             nombre="Proveedor Verificado",
             rubros='["Plomeria"]',
-            zona="La Plata",
             ciudad="La Plata",
             barrio="Centro",
             lat=-34.9205,
@@ -85,7 +83,6 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             id=2,
             nombre="Proveedor Cercano",
             rubros='["Plomeria"]',
-            zona="Caballito, CABA",
             ciudad="CABA",
             barrio="Caballito",
             lat=-34.6183,
@@ -98,7 +95,6 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             id=3,
             nombre="Proveedor Base",
             rubros='["Plomeria"]',
-            zona="Almagro, CABA",
             ciudad="CABA",
             barrio="Almagro",
             lat=-34.6100,
@@ -137,7 +133,6 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             id=1,
             nombre="Proveedor Lejano",
             rubros='["Plomeria"]',
-            zona="La Plata",
             ciudad="La Plata",
             barrio="Centro",
             lat=-34.9205,
@@ -150,7 +145,6 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             id=2,
             nombre="Proveedor Wilde",
             rubros='["Plomeria"]',
-            zona="Wilde, Avellaneda",
             ciudad="Avellaneda",
             barrio="Wilde",
             lat=-34.7042,
@@ -182,7 +176,7 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
         ):
             results = await providers.buscar_prestadores(
                 ctx,
-                providers.BuscarPrestadoresInput(rubro="plomero", zona="Wilde", limit=3),
+                providers.BuscarPrestadoresInput(rubro="plomero", barrio="Wilde", limit=3),
             )
 
         geocode_mock.assert_awaited_once_with("Wilde")
@@ -203,7 +197,7 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(origin, (-34.1, -58.1))
 
-    def test_text_zone_filter_is_disabled_when_origin_has_coordinates(self) -> None:
+    def test_text_location_filter_is_disabled_when_origin_has_coordinates(self) -> None:
         """Once the search origin is known, textual filtering should not narrow results."""
-        self.assertFalse(providers._should_apply_text_zone_filter("Wilde", -34.70, -58.32))
-        self.assertTrue(providers._should_apply_text_zone_filter("Wilde", None, None))
+        self.assertFalse(providers._should_apply_text_location_filter("Wilde", "Avellaneda", -34.70, -58.32))
+        self.assertTrue(providers._should_apply_text_location_filter("Wilde", None, None, None))

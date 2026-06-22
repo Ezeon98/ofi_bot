@@ -40,7 +40,8 @@ _alog = AgentLogger(enabled=True)
 
 class BuscarPrestadoresInput(BaseModel):
     rubro: str = Field(description="Service category, e.g. 'plomero', 'electricista'")
-    zona: str | None = Field(default=None, description="Neighborhood, city, or zone label")
+    barrio: str | None = Field(default=None, description="Neighborhood or district name")
+    ciudad: str | None = Field(default=None, description="City or locality name")
     lat: float | None = Field(default=None, description="Optional user latitude for ranking")
     lon: float | None = Field(default=None, description="Optional user longitude for ranking")
     solo_verificados: bool = Field(default=False)
@@ -54,14 +55,15 @@ class BuscarPrestadoresInput(BaseModel):
 class CrearPrestadorInput(BaseModel):
     nombre: str
     rubros: list[str] = Field(min_length=1, max_length=2)
-    zona: str
+    barrio: str | None = Field(default=None, description="Neighborhood or district")
+    ciudad: str | None = Field(default=None, description="City or locality")
     disponibilidad: str | None = None
     experiencia: str | None = Field(default=None, max_length=500)
     facturacion: str = Field(default="no_factura")
 
 
 class ActualizarPrestadorInput(BaseModel):
-    field: str = Field(description="Field to update: disponibilidad, experiencia, zona, rubros")
+    field: str = Field(description="Field to update: disponibilidad, experiencia, barrio, ciudad, rubros")
     value: str = Field(description="New value (rubros as JSON array string)")
 
 
@@ -76,15 +78,15 @@ async def buscar_prestadores(
     ctx: RunContext[AgentDependencies],
     params: BuscarPrestadoresInput,
 ) -> list[dict[str, Any]]:
-    """Find active service providers matching a rubro and optional zone.
+    """Find active service providers matching a rubro and optional location.
 
     Returns up to `limit` results, verified providers first.
     """
     # ── Log search entry ──────────────────────────────────────────────
     user_id = ctx.deps.user_id if hasattr(ctx.deps, "user_id") else "?"
     logger.info(
-        "PROVIDER_SEARCH user=%s rubro=%r zona=%r lat=%r lon=%r solo_ver=%d limit=%d",
-        user_id, params.rubro, params.zona, params.lat, params.lon,
+        "PROVIDER_SEARCH user=%s rubro=%r barrio=%r ciudad=%r lat=%r lon=%r solo_ver=%d limit=%d",
+        user_id, params.rubro, params.barrio, params.ciudad, params.lat, params.lon,
         params.solo_verificados, params.limit,
     )
 
@@ -104,21 +106,25 @@ async def buscar_prestadores(
     if params.solo_verificados:
         stmt = stmt.where(ProviderModel.badge_activo == True)  # noqa: E712
 
-    use_text_zone_filter = _should_apply_text_zone_filter(params.zona, origin_lat, origin_lon)
+    # Apply text-based location filter using barrio/ciudad
+    use_text_location_filter = _should_apply_text_location_filter(params.barrio, params.ciudad, origin_lat, origin_lon)
     logger.info(
-        "PROVIDER_FILTER user=%s use_text_zone=%s zona=%s",
-        user_id, use_text_zone_filter, params.zona,
+        "PROVIDER_FILTER user=%s use_text_location=%s barrio=%s ciudad=%s",
+        user_id, use_text_location_filter, params.barrio, params.ciudad,
     )
 
-    if use_text_zone_filter:
-        zona_term = f"%{params.zona}%"
-        stmt = stmt.where(
-            or_(
-                ProviderModel.zona.ilike(zona_term),
-                ProviderModel.ciudad.ilike(zona_term),
-                ProviderModel.barrio.ilike(zona_term),
-            )
-        )
+    if use_text_location_filter:
+        location_filters = []
+        if params.barrio:
+            barrio_term = f"%{params.barrio}%"
+            location_filters.append(ProviderModel.barrio.ilike(barrio_term))
+            location_filters.append(ProviderModel.ciudad.ilike(barrio_term))
+        if params.ciudad:
+            ciudad_term = f"%{params.ciudad}%"
+            location_filters.append(ProviderModel.barrio.ilike(ciudad_term))
+            location_filters.append(ProviderModel.ciudad.ilike(ciudad_term))
+        if location_filters:
+            stmt = stmt.where(or_(*location_filters))
 
     if params.rubro:
         rubro_terms = _build_rubro_search_terms(params.rubro)
@@ -154,7 +160,7 @@ async def buscar_prestadores(
             ProviderModel.badge_activo.desc(),
             ProviderModel.plan.desc(),
         )
-        .limit(max(params.limit * 3, 15))  # (D) reduced from max(limit*5, 25)
+        .limit(max(params.limit * 3, 15))
     )
 
     rows = list(await ctx.deps.db.execute(stmt))
@@ -180,7 +186,6 @@ async def buscar_prestadores(
             {
                 "nombre": r.nombre,
                 "rubros": rubros,
-                "zona": r.zona,
                 "ciudad": r.ciudad,
                 "barrio": r.barrio,
                 "lat": r.lat,
@@ -231,7 +236,8 @@ async def crear_prestador(
         usuario_id=int(ctx.deps.user_id) if ctx.deps.user_id.isdigit() else 0,
         nombre=params.nombre,
         rubros=json.dumps(params.rubros, ensure_ascii=False),
-        zona=params.zona,
+        ciudad=params.ciudad,
+        barrio=params.barrio,
         disponibilidad=params.disponibilidad,
         experiencia=params.experiencia,
         facturacion=params.facturacion,
@@ -248,7 +254,7 @@ async def actualizar_prestador(
     params: ActualizarPrestadorInput,
 ) -> dict[str, Any]:
     """Update a single field of the current user's provider profile."""
-    allowed_fields = {"disponibilidad", "experiencia", "zona", "rubros"}
+    allowed_fields = {"disponibilidad", "experiencia", "barrio", "ciudad", "rubros"}
     if params.field not in allowed_fields:
         return {"error": f"Campo no permitido: {params.field}"}
 
@@ -294,7 +300,6 @@ async def consultar_prestador(
         "id": row.id,
         "nombre": row.nombre,
         "rubros": rubros,
-        "zona": row.zona,
         "ciudad": row.ciudad,
         "barrio": row.barrio,
         "lat": row.lat,
@@ -354,37 +359,52 @@ async def _resolve_search_origin(
     metadata: dict[str, Any] | None,
     params: BuscarPrestadoresInput,
 ) -> tuple[float | None, float | None]:
-    """Pick the best available search origin for distance ranking."""
+    """Pick the best available search origin for distance ranking.
+
+    Builds a location label from {barrio, ciudad} for geocoding if needed.
+    """
     if params.lat is not None and params.lon is not None:
         return params.lat, params.lon
-    if not metadata:
-        if params.zona:
-            geocoded = await geocode_text_location(params.zona)
-            latitude = geocoded.get("lat")
-            longitude = geocoded.get("lon")
-            if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
-                return float(latitude), float(longitude)
-        return None, None
-    latitude = metadata.get("latitude")
-    longitude = metadata.get("longitude")
-    if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
-        return float(latitude), float(longitude)
-    if params.zona:
-        geocoded = await geocode_text_location(params.zona)
+
+    location_label = _build_location_label(params.barrio, params.ciudad)
+    if not metadata and location_label:
+        geocoded = await geocode_text_location(location_label)
         latitude = geocoded.get("lat")
         longitude = geocoded.get("lon")
         if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
             return float(latitude), float(longitude)
+        return None, None
+
+    if metadata:
+        latitude = metadata.get("latitude")
+        longitude = metadata.get("longitude")
+        if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
+            return float(latitude), float(longitude)
+
+    if location_label:
+        geocoded = await geocode_text_location(location_label)
+        latitude = geocoded.get("lat")
+        longitude = geocoded.get("lon")
+        if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
+            return float(latitude), float(longitude)
+
     return None, None
 
 
-def _should_apply_text_zone_filter(
-    zona: str | None,
+def _build_location_label(barrio: str | None, ciudad: str | None) -> str | None:
+    """Build a human-readable location label from barrio and ciudad."""
+    parts = [part for part in [barrio, ciudad] if isinstance(part, str) and part]
+    return ", ".join(parts) if parts else None
+
+
+def _should_apply_text_location_filter(
+    barrio: str | None,
+    ciudad: str | None,
     origin_lat: float | None,
     origin_lon: float | None,
 ) -> bool:
-    """Use textual zone filtering only when no coordinate origin is available."""
-    return bool(zona) and origin_lat is None and origin_lon is None
+    """Use textual location filtering only when no coordinate origin is available."""
+    return bool(barrio or ciudad) and origin_lat is None and origin_lon is None
 
 
 def _build_rubro_search_terms(rubro: str) -> list[str]:
@@ -518,7 +538,7 @@ def _profession_stem(word: str) -> str | None:
 def _expand_rubro_synonyms(rubro: str) -> list[str]:
     """Generate all known synonym variants for a given rubro search term.
 
-    E.g. "electricista" → ["%electricista%", "%electricist%", "%electricidad%", "%electric%"]
+    E.g. "electricista" -> ["%electricista%", "%electricist%", "%electricidad%", "%electric%"]
     """
     normalized = _normalize_rubro_text(rubro)
     expanded: set[str] = set()

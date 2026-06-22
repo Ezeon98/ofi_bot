@@ -12,6 +12,7 @@ def test_provider_model_includes_searchable_location_columns() -> None:
     assert "barrio" in columns
     assert "lat" in columns
     assert "lon" in columns
+    assert "zona" not in columns  # zona was removed, use {barrio, ciudad}
 
 
 def test_provider_model_constraints_support_single_profile_per_user() -> None:
@@ -22,6 +23,7 @@ def test_provider_model_constraints_support_single_profile_per_user() -> None:
     assert "uq_providers_usuario_id" in constraint_names
     assert "ck_providers_active_requires_location" in constraint_names
     assert "ix_providers_ciudad_barrio_activo" in index_names
+    assert "ix_providers_zona" not in index_names  # zona index was removed
 
 
 def test_trade_catalog_tables_exist() -> None:

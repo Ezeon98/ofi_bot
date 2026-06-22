@@ -35,7 +35,6 @@ LOCATION_MEMORY_KEYS = {
     "lon": "search_longitude",
     "ciudad": "search_ciudad",
     "barrio": "search_barrio",
-    "zona": "search_zona",
 }
 SEARCH_BUTTON_ID = "post_terms_seek_services"
 SEARCH_PREFIXES = (
@@ -71,6 +70,15 @@ SEARCH_FOLLOWUP_STOPWORDS = {
     "ahora",
     "ya",
 }
+LOCATION_SPLIT_PATTERN = r"\b(?: en | por | para | cerca de )\b"
+ZONE_NOISE_PREFIXES = (
+    "la zona de ",
+    "zona de ",
+    "el barrio de ",
+    "barrio de ",
+    "la localidad de ",
+    "localidad de ",
+)
 ZONE_REPLY_PREFIXES = (
     "mi ubicacion es ",
     "mi ubicación es ",
@@ -156,7 +164,7 @@ class ProviderSearchService:
                 search_location = current_location
                 self._log(turn_id, "guided_search.awaiting_zone.from_metadata", rubro=rubro)
             elif typed_zone:
-                search_location = {"zona": typed_zone}
+                search_location = {"barrio": typed_zone}
                 self._log(turn_id, "guided_search.awaiting_zone.from_text", rubro=rubro, typed_zone=typed_zone)
             elif stored_location is not None:
                 search_location = stored_location
@@ -176,7 +184,7 @@ class ProviderSearchService:
         if not self._is_search_start(message, metadata):
             return None
 
-        rubro = self._extract_search_need(message, allow_plain=False)
+        rubro = self._extract_search_need(message, allow_plain=True)
         if rubro is None:
             self._log(turn_id, "guided_search.fresh.no_rubro", message_preview=message[:80])
             await self._save_search_state(state_repo, user_id, "awaiting_need")
@@ -190,7 +198,7 @@ class ProviderSearchService:
         if search_location is None:
             inline_zone = self._extract_inline_zone(message)
             if inline_zone is not None:
-                search_location = {"zona": inline_zone}
+                search_location = {"barrio": inline_zone}
                 self._log(
                     turn_id,
                     "guided_search.fresh.inline_zone",
@@ -216,24 +224,32 @@ class ProviderSearchService:
         self,
         agent_response: AgentResponse,
         rubro: str | None = None,
+        providers: list[dict[str, Any]] | None = None,
     ) -> AgentResponse:
         """If the agent's metadata contains 'providers', reformat into individual messages.
 
         This ensures that when the LLM returns provider results (instead of the shortcut),
         each provider is still sent as a separate message with a contact button.
         """
-        if not agent_response.metadata or "providers" not in agent_response.metadata:
+        effective_providers = providers
+        if effective_providers is None and agent_response.metadata:
+            raw_providers = agent_response.metadata.get("providers")
+            if isinstance(raw_providers, list):
+                effective_providers = raw_providers
+
+        if not effective_providers:
             return agent_response
 
-        providers = agent_response.metadata["providers"]
-        if not providers:
-            return agent_response
+        metadata = dict(agent_response.metadata or {})
+        metadata["providers"] = effective_providers
+        agent_response.metadata = metadata
 
         effective_rubro = rubro or (agent_response.entities.get("rubro") if agent_response.entities else None) or "prestadores"
-        location_label = (agent_response.entities.get("zona") if agent_response.entities else None) or "tu ubicación"
+        location_label = (agent_response.entities.get("barrio") if agent_response.entities else None) or \
+            (agent_response.entities.get("ciudad") if agent_response.entities else None) or "tu ubicación"
 
         first_message, messages = ProviderSearchService._format_provider_results(
-            effective_rubro, location_label, providers,
+            effective_rubro, location_label, effective_providers,
         )
 
         # Keep the original message as the first message, add provider messages
@@ -242,6 +258,31 @@ class ProviderSearchService:
             agent_response.message = first_message
 
         return agent_response
+
+    @staticmethod
+    def extract_provider_results_from_run_messages(
+        run_messages: list[Any],
+    ) -> list[dict[str, Any]] | None:
+        """Recover raw provider results from the latest tool return in a model run."""
+        for message in reversed(run_messages):
+            parts = getattr(message, "parts", None)
+            if not parts:
+                continue
+
+            for part in reversed(parts):
+                if getattr(part, "part_kind", None) != "tool-return":
+                    continue
+                if getattr(part, "tool_name", None) != "tool_buscar_prestadores":
+                    continue
+
+                content = getattr(part, "content", None)
+                if not isinstance(content, list) or not content:
+                    return None
+                if not all(isinstance(item, dict) for item in content):
+                    return None
+                return content
+
+        return None
 
     async def store_search_location_if_available(
         self,
@@ -274,7 +315,8 @@ class ProviderSearchService:
 
         params = BuscarPrestadoresInput(
             rubro=rubro,
-            zona=self._location_label(location),
+            barrio=location.get("barrio"),
+            ciudad=location.get("ciudad"),
             lat=location.get("lat"),
             lon=location.get("lon"),
             limit=5,
@@ -283,7 +325,8 @@ class ProviderSearchService:
         self._log(
             turn_id,
             "shortcut.search_run",
-            rubro=rubro, zona=params.zona, lat=params.lat, lon=params.lon,
+            rubro=rubro, barrio=params.barrio, ciudad=params.ciudad,
+            lat=params.lat, lon=params.lon,
         )
         providers = await buscar_prestadores(ctx, params)
         self._log(
@@ -305,7 +348,8 @@ class ProviderSearchService:
                     "Si querés, probá con otra zona o con un rubro más amplio."
                 ),
                 confidence=1.0,
-                entities={"rubro": rubro, "zona": location_label, "detalle": detail},
+                entities={"rubro": rubro, "barrio": location.get("barrio"),
+                          "ciudad": location.get("ciudad"), "detalle": detail},
                 requires_action=True,
             )
 
@@ -318,7 +362,8 @@ class ProviderSearchService:
             message=first_message,
             messages=messages,
             confidence=1.0,
-            entities={"rubro": rubro, "zona": location_label, "detalle": detail},
+            entities={"rubro": rubro, "barrio": location.get("barrio"),
+                      "ciudad": location.get("ciudad"), "detalle": detail},
             requires_action=True,
             metadata={"providers": providers},
         )
@@ -329,15 +374,15 @@ class ProviderSearchService:
     async def _enrich_location_with_coords(
         location: dict[str, Any],
     ) -> dict[str, Any]:
-        """If a location has a text zone but no coordinates, resolve via geocoding."""
+        """If a location has a text location but no coordinates, resolve via geocoding."""
         if location.get("lat") is not None and location.get("lon") is not None:
             return location
 
-        zona = ProviderSearchService._location_label(location)
-        if not zona:
+        location_label = ProviderSearchService._location_label(location)
+        if not location_label:
             return location
 
-        geocoded = await geocode_text_location(zona)
+        geocoded = await geocode_text_location(location_label)
         latitude = geocoded.get("lat")
         longitude = geocoded.get("lon")
         if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
@@ -379,13 +424,11 @@ class ProviderSearchService:
         if latitude is None and longitude is None and not ciudad and not barrio:
             return None
 
-        zona_parts = [part for part in [barrio, ciudad] if isinstance(part, str) and part]
         return {
             "lat": float(latitude) if isinstance(latitude, (int, float)) else None,
             "lon": float(longitude) if isinstance(longitude, (int, float)) else None,
             "ciudad": ciudad if isinstance(ciudad, str) else None,
             "barrio": barrio if isinstance(barrio, str) else None,
-            "zona": ", ".join(zona_parts) if zona_parts else None,
         }
 
     @staticmethod
@@ -396,23 +439,18 @@ class ProviderSearchService:
         lon = ProviderSearchService._parse_float(values.get(LOCATION_MEMORY_KEYS["lon"]))
         ciudad = values.get(LOCATION_MEMORY_KEYS["ciudad"])
         barrio = values.get(LOCATION_MEMORY_KEYS["barrio"])
-        zona = values.get(LOCATION_MEMORY_KEYS["zona"])
-        if lat is None and lon is None and not ciudad and not barrio and not zona:
+        if lat is None and lon is None and not ciudad and not barrio:
             return None
         return {
             "lat": lat,
             "lon": lon,
             "ciudad": ciudad,
             "barrio": barrio,
-            "zona": zona,
         }
 
     @staticmethod
     def _location_label(location: dict[str, Any]) -> str | None:
         """Return the best human-readable label for a search location."""
-        zona = location.get("zona")
-        if isinstance(zona, str) and zona:
-            return zona
         parts = [location.get("barrio"), location.get("ciudad")]
         labels = [part for part in parts if isinstance(part, str) and part]
         return ", ".join(labels) if labels else None
@@ -438,7 +476,7 @@ class ProviderSearchService:
                 lines.append(f"🔧 {rubros_str}")
             if provider.get("badge_verificado"):
                 lines.append("✅ Verificado")
-            zone = provider.get("barrio") or provider.get("ciudad") or provider.get("zona") or ""
+            zone = provider.get("barrio") or provider.get("ciudad") or ""
             if zone:
                 lines.append(f"📍 {zone}")
             distance = provider.get("distance_km")
@@ -476,7 +514,13 @@ class ProviderSearchService:
             "contratar servicio",
         }:
             return True
-        return any(normalized.startswith(prefix) for prefix in SEARCH_PREFIXES)
+        if any(normalized.startswith(prefix) for prefix in SEARCH_PREFIXES):
+            return True
+
+        return (
+            ProviderSearchService._extract_search_need(message, allow_plain=True) is not None
+            and ProviderSearchService._extract_location_fragment(normalized) is not None
+        )
 
     @staticmethod
     def _extract_search_need(message: str, allow_plain: bool) -> str | None:
@@ -491,7 +535,7 @@ class ProviderSearchService:
             if not allow_plain:
                 return None
 
-        candidate = re.split(r"\b(?: en | por | para | cerca de )\b", candidate, maxsplit=1)[0]
+        candidate = re.split(LOCATION_SPLIT_PATTERN, candidate, maxsplit=1)[0]
         words = [
             word
             for word in re.findall(r"[a-záéíóúñ]+", candidate)
@@ -514,13 +558,14 @@ class ProviderSearchService:
                 candidate = normalized[len(prefix) :]
                 break
         else:
-            return None
+            if ProviderSearchService._extract_search_need(message, allow_plain=True) is None:
+                return None
 
-        parts = re.split(r"\b(?: en | por | para | cerca de )\b", candidate, maxsplit=1)
+        parts = re.split(LOCATION_SPLIT_PATTERN, candidate, maxsplit=1)
         if len(parts) < 2:
             return None
 
-        zone = parts[1].strip(" .,!?:;")
+        zone = ProviderSearchService._clean_zone_text(parts[1])
         if not zone:
             return None
 
@@ -538,13 +583,43 @@ class ProviderSearchService:
                 normalized = normalized[len(prefix):]
                 break
 
-        if not normalized or ProviderSearchService._is_search_start(message, None):
+        if not normalized:
             return None
 
-        words = normalized.split()
+        if (
+            ProviderSearchService._is_search_start(message, None)
+            and ProviderSearchService._extract_location_fragment(normalized) is None
+        ):
+            return None
+
+        zone = ProviderSearchService._extract_location_fragment(normalized) or ProviderSearchService._clean_zone_text(normalized)
+        words = zone.split()
         if not words or len(words) > 6:
             return None
-        return message.strip(" .,!?:;")
+        return zone
+
+    @staticmethod
+    def _extract_location_fragment(text: str) -> str | None:
+        """Return the location suffix after a connector like 'en' when present."""
+        parts = re.split(LOCATION_SPLIT_PATTERN, text, maxsplit=1)
+        if len(parts) < 2:
+            return None
+
+        zone = ProviderSearchService._clean_zone_text(parts[1])
+        return zone or None
+
+    @staticmethod
+    def _clean_zone_text(text: str) -> str:
+        """Remove common filler around free-text locations."""
+        zone = text.strip(" .,!?:;")
+        while True:
+            lowered = zone.lower()
+            for prefix in ZONE_NOISE_PREFIXES:
+                if lowered.startswith(prefix):
+                    zone = zone[len(prefix):].strip(" .,!?:;")
+                    break
+            else:
+                return zone
 
     # ── state persistence ─────────────────────────────────────────────────
 
@@ -563,7 +638,6 @@ class ProviderSearchService:
                 "estado": SEARCH_STATE_NAME,
                 "paso": paso,
                 "rubro": rubro,
-                "zona": None,
                 "detalle": detalle,
             },
         )
@@ -582,7 +656,6 @@ class ProviderSearchService:
         lon = location.get("lon")
         ciudad = location.get("ciudad")
         barrio = location.get("barrio")
-        zona = ProviderSearchService._location_label(location)
 
         if lat is not None and lon is not None:
             await memory_service.upsert_memory(
@@ -610,13 +683,6 @@ class ProviderSearchService:
                 LOCATION_MEMORY_KEYS["barrio"],
                 barrio,
                 0.8,
-            )
-        if zona:
-            await memory_service.upsert_memory(
-                user_id,
-                LOCATION_MEMORY_KEYS["zona"],
-                zona,
-                0.85,
             )
 
     # ── utilities ──────────────────────────────────────────────────────────

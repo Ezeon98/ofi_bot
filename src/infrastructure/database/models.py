@@ -131,7 +131,6 @@ class ProviderModel(Base):
     __tablename__ = "providers"
     __table_args__ = (
         Index("ix_providers_plan_activo", "plan", "activo"),
-        Index("ix_providers_zona", "zona"),
         Index("ix_providers_ciudad_barrio_activo", "ciudad", "barrio", "activo"),
         UniqueConstraint("usuario_id", name="uq_providers_usuario_id"),
         CheckConstraint(
@@ -147,7 +146,6 @@ class ProviderModel(Base):
     )
     nombre: Mapped[str] = mapped_column(String(100), nullable=False)
     rubros: Mapped[str] = mapped_column(Text, nullable=False, default="[]")  # JSON array
-    zona: Mapped[str] = mapped_column(String(100), nullable=False)
     ciudad: Mapped[str | None] = mapped_column(String(120), nullable=True)
     barrio: Mapped[str | None] = mapped_column(String(120), nullable=True)
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -205,6 +203,35 @@ class ProviderTradeModel(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
+    )
+
+
+class ProviderRatingModel(Base):
+    """User ratings for service providers.
+
+    Each user can rate a provider once. Ratings range from 1 to 5.
+    """
+
+    __tablename__ = "provider_ratings"
+    __table_args__ = (
+        UniqueConstraint("usuario_id", "provider_id", name="uq_provider_rating_user_provider"),
+        Index("ix_provider_ratings_provider", "provider_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    usuario_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("usuarios.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=False
+    )
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
 

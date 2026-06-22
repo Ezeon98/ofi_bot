@@ -56,8 +56,9 @@ async def procesar_texto(
     elapsed_ms = (time.monotonic() - _start) * 1000
 
     logger.info(
-        "OUTGOING user=%s intent=%s confidence=%.2f elapsed=%.0fms msg_len=%d",
+        "OUTGOING user=%s source=%s intent=%s confidence=%.2f elapsed=%.0fms msg_len=%d",
         sender,
+        response.source,
         response.intent,
         response.confidence,
         elapsed_ms,
@@ -66,6 +67,7 @@ async def procesar_texto(
     _alog.info(
         "", "router.response",
         user_id=sender,
+        source=response.source,
         intent=response.intent,
         confidence=response.confidence,
         requires_action=response.requires_action,

@@ -75,7 +75,6 @@ class UsuarioRepository:
                 tier=tier,
                 subscription_type=subscription_type,
                 tier_expires_at=expires_at,
-                grace_notified=False,
             )
         )
         await self._s.commit()
@@ -99,7 +98,6 @@ class UsuarioRepository:
                 tier=tier,
                 subscription_type=subscription_type,
                 tier_expires_at=expires_at,
-                grace_notified=False,
                 mp_payer_id=mp_payer_id,
                 mp_subscription_id=mp_subscription_id,
                 mp_subscribed_at=_now(),

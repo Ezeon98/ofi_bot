@@ -45,7 +45,8 @@ class SearchStateToolTests(IsolatedAsyncioTestCase):
                 "activo": False,
                 "paso": None,
                 "rubro": None,
-                "zona": None,
+                "barrio": None,
+                "ciudad": None,
                 "detalle": None,
             },
         )
@@ -70,7 +71,8 @@ class SearchStateToolTests(IsolatedAsyncioTestCase):
                 "estado": search_state.SEARCH_STATE_NAME,
                 "paso": "awaiting_zone",
                 "rubro": "plomero",
-                "zona": None,
+                "barrio": None,
+                "ciudad": None,
                 "detalle": "urgente",
             },
         )

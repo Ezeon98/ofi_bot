@@ -22,7 +22,8 @@ class GuardarEstadoBusquedaInput(BaseModel):
         description="Current search step, e.g. 'awaiting_need', 'awaiting_zone', 'ready_to_search'"
     )
     rubro: str | None = Field(default=None, description="Captured trade or need")
-    zona: str | None = Field(default=None, description="Captured neighborhood, city or area")
+    barrio: str | None = Field(default=None, description="Captured neighborhood or district")
+    ciudad: str | None = Field(default=None, description="Captured city or locality")
     detalle: str | None = Field(
         default=None,
         description="Optional free-text detail for the search, e.g. 'urgente'",
@@ -40,13 +41,14 @@ async def consultar_estado_busqueda(
     """Return the current guided-search state for the user, if any."""
     state = await EstadoRepository(ctx.deps.db).get(ctx.deps.user_id)
     if state.get("estado") != SEARCH_STATE_NAME:
-        return {"activo": False, "paso": None, "rubro": None, "zona": None, "detalle": None}
+        return {"activo": False, "paso": None, "rubro": None, "barrio": None, "ciudad": None, "detalle": None}
 
     return {
         "activo": True,
         "paso": state.get("paso"),
         "rubro": state.get("rubro"),
-        "zona": state.get("zona"),
+        "barrio": state.get("barrio"),
+        "ciudad": state.get("ciudad"),
         "detalle": state.get("detalle"),
     }
 
@@ -60,7 +62,8 @@ async def guardar_estado_busqueda(
         "estado": SEARCH_STATE_NAME,
         "paso": params.paso,
         "rubro": params.rubro,
-        "zona": params.zona,
+        "barrio": params.barrio,
+        "ciudad": params.ciudad,
         "detalle": params.detalle,
     }
     await EstadoRepository(ctx.deps.db).save(ctx.deps.user_id, payload)

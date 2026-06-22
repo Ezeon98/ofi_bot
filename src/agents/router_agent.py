@@ -60,6 +60,14 @@ _last_tool_time: float = 0.0
 _ANTI_LOOP_WINDOW_S = 30  # seconds within which we consider a call a duplicate
 
 
+def _build_location_label_from_params(params: object) -> str:
+    """Build a location label from barrio and ciudad attributes on the params."""
+    barrio = getattr(params, "barrio", None) or ""
+    ciudad = getattr(params, "ciudad", None) or ""
+    parts = [p for p in [barrio, ciudad] if p]
+    return ", ".join(parts) if parts else "la ubicación actual"
+
+
 def _is_repeat_call(tool_name: str, params: object) -> Any | None:
     """Return a descriptive dict if the exact same call was made recently."""
     global _last_tool_call, _last_tool_time
@@ -73,16 +81,16 @@ def _is_repeat_call(tool_name: str, params: object) -> Any | None:
             "ANTI_LOOP detected repeat call tool=%s params=%s",
             tool_name, params,
         )
+        location_label = _build_location_label_from_params(params)
         return {
             "info": "duplicate_call_blocked",
             "message": (
-                f"Ya buscaste {params.rubro} en {params.zona or 'la ubicación actual'} "
+                f"Ya buscaste {params.rubro} en {location_label} "
                 "y no se encontraron resultados. No tiene sentido repetir la misma "
                 "búsqueda. Informale al usuario que no hay resultados y sugiere "
-                "alternativas (otro rubro, otra zona, o esperar a que se registren nuevos prestadores)."
+                "alternativas (otro rubro, otra ubicación, o esperar a que se registren nuevos prestadores)."
             ),
             "rubro": params.rubro,
-            "zona": params.zona,
         }
     _last_tool_call = sig
     _last_tool_time = now
@@ -111,7 +119,7 @@ async def tool_buscar_prestadores(
     ctx: RunContext[AgentDependencies],
     params: BuscarPrestadoresInput,
 ) -> list[dict] | dict:
-    """Find service providers matching a rubro and optional zone.
+    """Find service providers matching a rubro and optional location.
 
     NOTE for the LLM: If this tool returns a dict with "info": "duplicate_call_blocked",
     it means you already called this exact same search and got 0 results. STOP calling
@@ -127,8 +135,8 @@ async def tool_buscar_prestadores(
     if not providers:
         logger.info(
             "PROVIDER_ZERO_RESULTS tool_name=tool_buscar_prestadores "
-            "rubro=%r zona=%r lat=%r lon=%r",
-            params.rubro, params.zona, params.lat, params.lon,
+            "rubro=%r barrio=%r ciudad=%r lat=%r lon=%r",
+            params.rubro, params.barrio, params.ciudad, params.lat, params.lon,
         )
     return providers
 

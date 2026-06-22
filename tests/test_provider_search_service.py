@@ -45,7 +45,7 @@ class ProviderSearchServiceFormattingTests(IsolatedAsyncioTestCase):
                 )
             ],
             confidence=1.0,
-            entities={"rubro": "electricista", "zona": "Centro"},
+            entities={"rubro": "electricista", "barrio": "Centro"},
             requires_action=True,
             metadata={
                 "providers": [
@@ -53,13 +53,13 @@ class ProviderSearchServiceFormattingTests(IsolatedAsyncioTestCase):
                         "nombre": "Electricista Uno",
                         "rubros": ["Electricidad"],
                         "badge_verificado": True,
-                        "zona": "Centro",
+                        "barrio": "Centro",
                         "telefono": "5491111111111",
                     },
                     {
                         "nombre": "Electricista Dos",
                         "rubros": ["Electricidad"],
-                        "zona": "Centro",
+                        "barrio": "Centro",
                         "telefono": "5491222222222",
                     },
                 ]
@@ -92,7 +92,7 @@ class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
                 Message(text="👤 Sofia Tecnica"),
             ],
             confidence=1.0,
-            entities={"rubro": "electricistas", "zona": "caballito"},
+            entities={"rubro": "electricistas", "barrio": "caballito"},
             requires_action=True,
         )
 
@@ -126,4 +126,102 @@ class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
         build_response_mock.assert_awaited_once()
         _, kwargs = build_response_mock.await_args
         self.assertEqual(kwargs["rubro"], "electricistas")
-        self.assertEqual(kwargs["location"], {"zona": "caballito"})
+        self.assertEqual(kwargs["location"], {"barrio": "caballito"})
+
+    async def test_initial_search_strips_zone_filler_phrases(self) -> None:
+        """The shortcut should separate rubro and zone from natural phrasing."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+        expected = AgentResponse(
+            intent=Intent.BUSCAR_SERVICIO,
+            message="Encontré 2 electricistas cerca de caballito:",
+            messages=[
+                Message(text="👤 Maria Electricista"),
+                Message(text="👤 Sofia Tecnica"),
+            ],
+            confidence=1.0,
+            entities={"rubro": "electricista", "barrio": "caballito"},
+            requires_action=True,
+        )
+
+        with (
+            patch.object(
+                provider_search_service,
+                "EstadoRepository",
+                return_value=SimpleNamespace(
+                    get=AsyncMock(return_value={}),
+                    save=AsyncMock(),
+                    delete=AsyncMock(),
+                ),
+            ),
+            patch.object(
+                ProviderSearchService,
+                "_build_search_results_response",
+                new=AsyncMock(return_value=expected),
+            ) as build_response_mock,
+        ):
+            response = await service.maybe_handle_guided_search(
+                user_id="5491162527111",
+                message="Electricista por la zona de caballito",
+                metadata={"message_type": "text"},
+                deps=SimpleNamespace(db=object()),
+                memory_service=SimpleNamespace(),
+                memories=[],
+                turn_id="turn-3",
+            )
+
+        self.assertIs(response, expected)
+        _, kwargs = build_response_mock.await_args
+        self.assertEqual(kwargs["rubro"], "electricista")
+        self.assertEqual(kwargs["location"], {"barrio": "caballito"})
+
+    async def test_awaiting_zone_strips_trade_prefix_from_location_reply(self) -> None:
+        """A zone reply like 'electricista en caballito' should keep only the zone."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+        expected = AgentResponse(
+            intent=Intent.BUSCAR_SERVICIO,
+            message="Encontré opciones cerca de caballito.",
+            confidence=1.0,
+            entities={"rubro": "electricista", "barrio": "caballito"},
+            requires_action=True,
+        )
+
+        with (
+            patch.object(
+                provider_search_service,
+                "EstadoRepository",
+                return_value=SimpleNamespace(
+                    get=AsyncMock(
+                        return_value={
+                            "estado": provider_search_service.SEARCH_STATE_NAME,
+                            "paso": "awaiting_zone",
+                            "rubro": "electricista",
+                        }
+                    ),
+                    save=AsyncMock(),
+                    delete=AsyncMock(),
+                ),
+            ),
+            patch.object(
+                ProviderSearchService,
+                "_build_search_results_response",
+                new=AsyncMock(return_value=expected),
+            ) as build_response_mock,
+        ):
+            response = await service.maybe_handle_guided_search(
+                user_id="5491162527111",
+                message="Electricista en Caballito",
+                metadata={"message_type": "text"},
+                deps=SimpleNamespace(db=object()),
+                memory_service=SimpleNamespace(),
+                memories=[],
+                turn_id="turn-2",
+            )
+
+        self.assertIs(response, expected)
+        _, kwargs = build_response_mock.await_args
+        self.assertEqual(kwargs["rubro"], "electricista")
+        self.assertEqual(kwargs["location"], {"barrio": "caballito"})
