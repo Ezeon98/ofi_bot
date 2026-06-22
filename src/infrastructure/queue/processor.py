@@ -1,4 +1,4 @@
-"""Shared webhook message processing logic used by both the FastAPI app and the arq worker."""
+"""Shared inline webhook message processing logic."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def is_old_message(message_timestamp: int) -> bool:
 async def process_webhook_entries(body: dict) -> None:
     """Process all messages in a WhatsApp webhook payload.
 
-    Used by both the inline FastAPI handler and the arq worker.
+    The FastAPI webhook handler calls this directly.
     """
     factory = get_session_factory()
     async with factory() as session:

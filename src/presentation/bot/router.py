@@ -72,11 +72,21 @@ async def procesar_texto(
         elapsed_ms=round(elapsed_ms, 1),
         response_preview=response.message[:120],
     )
-    # ── Send the primary message ───────────────────────────────────────
+    # Provider cards are already split per message. Do not send the summary
+    # text as a separate WhatsApp message or we break the one-card-per-provider UI.
+    if response.messages:
+        await _send_additional_messages(sender, response.messages)
+        return
+
     await enviar_mensaje(sender, response.message)
 
-    # ── Send additional messages (one per provider with optional contact button) ──
-    for msg in response.messages:
+
+async def _send_additional_messages(
+    sender: str,
+    messages: list[dict[str, Any]],
+) -> None:
+    """Send each additional outbound message, preserving CTA buttons."""
+    for msg in messages:
         text = msg.get("text", "")
         action = msg.get("action")
         if action and action.get("type") == "cta_url":

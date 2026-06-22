@@ -103,6 +103,7 @@ engine = SchedulerEngine()
 def iniciar_scheduler() -> AsyncIOScheduler:
     """Create and start the APScheduler instance for scheduled tasks."""
     from src.schedulers.registry import TaskDefinition, registry
+    from src.schedulers.tasks.cleanup_old_conversations import CleanupOldConversationsTask
     from src.schedulers.tasks.example_task import ExampleTask
 
     tz_ba = "America/Argentina/Buenos_Aires"
@@ -118,56 +119,10 @@ def iniciar_scheduler() -> AsyncIOScheduler:
     )
     registry.register(
         TaskDefinition(
-            name="resumen_semanal",
-            task=ExampleTask(),
-            cron="0 22 * * 0",
+            name="cleanup_old_conversations",
+            task=CleanupOldConversationsTask(),
+            cron="0 4 * * *",
             timezone=tz_ba,
-            enabled=True,
-        )
-    )
-    registry.register(
-        TaskDefinition(
-            name="avanzar_cuotas",
-            task=ExampleTask(),
-            cron="0 8 1 * *",
-            timezone=tz_ba,
-            enabled=True,
-        )
-    )
-    registry.register(
-        TaskDefinition(
-            name="recordatorios",
-            task=ExampleTask(),
-            cron="0 10 * * *",
-            timezone=tz_ba,
-            enabled=True,
-            misfire_grace_time=3600,
-        )
-    )
-    registry.register(
-        TaskDefinition(
-            name="recordatorio_nocturno",
-            task=ExampleTask(),
-            cron="0 20 * * *",
-            timezone=tz_ba,
-            enabled=True,
-        )
-    )
-    registry.register(
-        TaskDefinition(
-            name="cleanup_messages_log",
-            task=ExampleTask(),
-            cron="0 3 * * *",
-            timezone=tz_ba,
-            enabled=True,
-            misfire_grace_time=3600,
-        )
-    )
-    registry.register(
-        TaskDefinition(
-            name="cleanup_stale_estados",
-            task=ExampleTask(),
-            interval_seconds=7200,
             enabled=True,
             misfire_grace_time=3600,
         )
@@ -202,11 +157,6 @@ def iniciar_scheduler() -> AsyncIOScheduler:
     scheduler.start()
     logger.info(
         "APScheduler iniciado — tarea diaria: 09:00 AR, "
-        "recordatorios: 10:00 AR, "
-        "resumen semanal: Domingo 22:00 AR, "
-        "cuotas: 1ro de cada mes 08:00 AR, "
-        "recordatorio nocturno: 20:00 AR diario, "
-        "cleanup messages: 03:00 AR diario, "
-        "cleanup estados: cada 2h"
+        "cleanup old conversations: 04:00 AR diario"
     )
     return scheduler

@@ -50,6 +50,7 @@ class RouterShortcutTests(IsolatedAsyncioTestCase):
             process=AsyncMock(
                 return_value=SimpleNamespace(
                     message="respuesta ai",
+                    messages=[],
                     intent=Intent.CONVERSACION_GENERAL.value,
                     confidence=1.0,
                     entities=None,
@@ -113,3 +114,70 @@ class RouterShortcutTests(IsolatedAsyncioTestCase):
 
         enviar_mensaje.assert_awaited_once()
         self.assertEqual(enviar_boton_cta.await_count, 3)
+
+    async def test_provider_results_send_one_cta_per_message(self) -> None:
+        """Provider cards should be delivered without an extra summary text."""
+        orchestrator = SimpleNamespace(
+            process=AsyncMock(
+                return_value=SimpleNamespace(
+                    message="Encontré 2 electricistas cerca de Centro:",
+                    messages=[
+                        {
+                            "text": "👤 Electricista Uno\n✅ Verificado",
+                            "action": {
+                                "type": "cta_url",
+                                "label": "Contactar",
+                                "url": "https://api.whatsapp.com/send?phone=5491111111111&text=Hola&type=phone_number&app_absent=0",
+                            },
+                        },
+                        {
+                            "text": "👤 Electricista Dos\n📍 Centro",
+                            "action": {
+                                "type": "cta_url",
+                                "label": "Contactar",
+                                "url": "https://api.whatsapp.com/send?phone=5491222222222&text=Hola&type=phone_number&app_absent=0",
+                            },
+                        },
+                    ],
+                    intent=Intent.BUSCAR_SERVICIO.value,
+                    confidence=1.0,
+                    entities={"rubro": "electricista", "zona": "Centro"},
+                    requires_action=True,
+                    metadata=None,
+                )
+            )
+        )
+
+        with (
+            patch.object(
+                router,
+                "_get_orchestrator",
+                return_value=orchestrator,
+            ),
+            patch.object(
+                router,
+                "enviar_typing",
+                new=AsyncMock(),
+            ),
+            patch.object(
+                router,
+                "enviar_mensaje",
+                new=AsyncMock(),
+            ) as enviar_mensaje_mock,
+            patch.object(
+                router,
+                "enviar_boton_cta",
+                new=AsyncMock(),
+            ) as enviar_boton_cta_mock,
+        ):
+            uow = SimpleNamespace(_session=object())
+            await router.procesar_texto(
+                uow,
+                "5491112345678",
+                "Necesito un electricista",
+                "wamid-2",
+                {"message_type": "text"},
+            )
+
+        enviar_mensaje_mock.assert_not_awaited()
+        self.assertEqual(enviar_boton_cta_mock.await_count, 2)

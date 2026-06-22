@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from urllib.parse import quote
-
 from src.infrastructure.external.whatsapp_client import (
+    build_whatsapp_contact_url,
     enviar_boton_cta,
     enviar_mensaje,
 )
@@ -56,8 +55,10 @@ def _build_card_body(card: dict[str, object]) -> str:
 
 def _build_contact_url(card: dict[str, object]) -> str:
     """Build a WhatsApp deeplink for the mock contact CTA."""
-    message = quote(f"Hola {card['name']}, te contacto desde LaburáYA.")
-    return f"https://wa.me/{card['phone']}?text={message}"
+    return build_whatsapp_contact_url(
+        str(card["phone"]),
+        f"Hola {card['name']}, te contacto desde LaburáYA.",
+    )
 
 
 async def enviar_cards_mock(sender: str) -> None:

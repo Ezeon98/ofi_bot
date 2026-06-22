@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from typing import Any
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -28,6 +29,21 @@ def _resp_body(resp: httpx.Response) -> str:
 
 def _settings():
     return get_settings()
+
+
+def build_whatsapp_contact_url(telefono: str, message: str) -> str:
+    """Build a cross-platform WhatsApp chat URL for a prefilled message."""
+    phone_digits = "".join(char for char in telefono if char.isdigit())
+    query = urlencode(
+        {
+            "phone": phone_digits,
+            "text": message,
+            "type": "phone_number",
+            "app_absent": "0",
+        },
+        quote_via=quote,
+    )
+    return f"https://api.whatsapp.com/send?{query}"
 
 
 async def enviar_mensaje(telefono: str, texto: str) -> None:

@@ -26,7 +26,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-import urllib.parse
 from types import SimpleNamespace
 from typing import Any
 
@@ -39,6 +38,7 @@ from src.agents.models.response import AgentResponse, Intent, Message, MessageAc
 from src.agents.router_agent import router_agent
 from src.context.builder import ContextBuilder
 from src.infrastructure.config import Settings
+from src.infrastructure.external.whatsapp_client import build_whatsapp_contact_url
 from src.memory.extractor import MemoryExtractor
 from src.memory.models import MemoryConfig
 from src.memory.schemas import MemoryRead
@@ -788,13 +788,15 @@ class AIOrchestrator:
             distance = provider.get("distance_km")
             if isinstance(distance, (int, float)):
                 lines.append(f"📏 {distance:.1f} km")
+            telefono = provider.get("telefono")
+            if telefono:
+                lines.append(f"📞 {telefono}")
             text = "\n".join(lines)
 
             # Build wa.me link for contact button
-            telefono = provider.get("telefono")
             action: MessageAction | None = None
             if telefono:
-                wa_url = f"https://wa.me/{telefono}?text={urllib.parse.quote(mensaje_contacto)}"
+                wa_url = build_whatsapp_contact_url(telefono, mensaje_contacto)
                 action = MessageAction(type="cta_url", label="Contactar", url=wa_url)
 
             messages.append(Message(text=text, action=action))

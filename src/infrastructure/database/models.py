@@ -48,9 +48,6 @@ class UsuarioModel(Base):
     # Subscription management
     subscription_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
     tier_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    grace_notified: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="false"
-    )
     # MercadoPago subscription fields
     mp_payer_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     mp_subscription_id: Mapped[str | None] = mapped_column(String(100), nullable=True)

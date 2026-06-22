@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import logging
 import re
-import urllib.parse
 from types import SimpleNamespace
 from typing import Any
 
 from src.agents.dependencies import AgentDependencies
 from src.agents.models.response import AgentResponse, Intent, Message, MessageAction
+from src.infrastructure.external.whatsapp_client import build_whatsapp_contact_url
 from src.infrastructure.database.repositories.estado import EstadoRepository
 from src.memory.service import MemoryService
 from src.memory.schemas import MemoryRead
@@ -39,6 +39,12 @@ LOCATION_MEMORY_KEYS = {
 }
 SEARCH_BUTTON_ID = "post_terms_seek_services"
 SEARCH_PREFIXES = (
+    "buscarme un ",
+    "buscarme una ",
+    "buscarme ",
+    "buscame un ",
+    "buscame una ",
+    "buscame ",
     "necesito un ",
     "necesito una ",
     "necesito ",
@@ -135,6 +141,7 @@ class ProviderSearchService:
                 return self._build_location_request_response(rubro)
             self._log(turn_id, "guided_search.awaiting_need.search_ready", rubro=rubro, location=self._location_label(search_location))
             return await self._build_search_results_response(
+                turn_id=turn_id,
                 deps=deps,
                 memory_service=memory_service,
                 rubro=rubro,
@@ -158,6 +165,7 @@ class ProviderSearchService:
                 self._log(turn_id, "guided_search.awaiting_zone.no_zone_found", rubro=rubro)
                 return None
             return await self._build_search_results_response(
+                turn_id=turn_id,
                 deps=deps,
                 memory_service=memory_service,
                 rubro=rubro,
@@ -180,12 +188,23 @@ class ProviderSearchService:
             )
 
         if search_location is None:
-            self._log(turn_id, "guided_search.fresh.need_zone", rubro=rubro)
-            await self._save_search_state(state_repo, user_id, "awaiting_zone", rubro)
-            return self._build_location_request_response(rubro)
+            inline_zone = self._extract_inline_zone(message)
+            if inline_zone is not None:
+                search_location = {"zona": inline_zone}
+                self._log(
+                    turn_id,
+                    "guided_search.fresh.inline_zone",
+                    rubro=rubro,
+                    typed_zone=inline_zone,
+                )
+            else:
+                self._log(turn_id, "guided_search.fresh.need_zone", rubro=rubro)
+                await self._save_search_state(state_repo, user_id, "awaiting_zone", rubro)
+                return self._build_location_request_response(rubro)
 
         self._log(turn_id, "guided_search.fresh.search_ready", rubro=rubro, location=self._location_label(search_location))
         return await self._build_search_results_response(
+            turn_id=turn_id,
             deps=deps,
             memory_service=memory_service,
             rubro=rubro,
@@ -207,8 +226,7 @@ class ProviderSearchService:
             return agent_response
 
         providers = agent_response.metadata["providers"]
-        if not providers or len(agent_response.messages) > 0:
-            # Already has messages or no providers — skip
+        if not providers:
             return agent_response
 
         effective_rubro = rubro or (agent_response.entities.get("rubro") if agent_response.entities else None) or "prestadores"
@@ -244,6 +262,7 @@ class ProviderSearchService:
     async def _build_search_results_response(
         self,
         *,
+        turn_id: str,
         deps: AgentDependencies,
         memory_service: MemoryService,
         rubro: str,
@@ -262,11 +281,13 @@ class ProviderSearchService:
         )
         ctx = SimpleNamespace(deps=deps)
         self._log(
+            turn_id,
             "shortcut.search_run",
             rubro=rubro, zona=params.zona, lat=params.lat, lon=params.lon,
         )
         providers = await buscar_prestadores(ctx, params)
         self._log(
+            turn_id,
             "shortcut.search_result",
             rubro=rubro, provider_count=len(providers),
             provider_names=[p.get("nombre") for p in providers[:5]],
@@ -428,7 +449,7 @@ class ProviderSearchService:
             telefono = provider.get("telefono")
             action: MessageAction | None = None
             if telefono:
-                wa_url = f"https://wa.me/{telefono}?text={urllib.parse.quote(mensaje_contacto)}"
+                wa_url = build_whatsapp_contact_url(telefono, mensaje_contacto)
                 action = MessageAction(type="cta_url", label="Contactar", url=wa_url)
 
             messages.append(Message(text=text, action=action))
@@ -482,6 +503,31 @@ class ProviderSearchService:
         if len(words) == 1 and words[0] in {"servicio", "servicios", "ayuda"}:
             return None
         return " ".join(words[:3])
+
+    @staticmethod
+    def _extract_inline_zone(message: str) -> str | None:
+        """Extract a zone written inside the initial search message."""
+        normalized = ProviderSearchService._normalize_message(message)
+        candidate = normalized
+        for prefix in SEARCH_PREFIXES:
+            if normalized.startswith(prefix):
+                candidate = normalized[len(prefix) :]
+                break
+        else:
+            return None
+
+        parts = re.split(r"\b(?: en | por | para | cerca de )\b", candidate, maxsplit=1)
+        if len(parts) < 2:
+            return None
+
+        zone = parts[1].strip(" .,!?:;")
+        if not zone:
+            return None
+
+        words = zone.split()
+        if len(words) > 6:
+            return None
+        return zone
 
     @staticmethod
     def _extract_zone_reply(message: str) -> str | None:

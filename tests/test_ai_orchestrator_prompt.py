@@ -8,8 +8,16 @@ from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.agents.models.response import Intent
-from src.application.services.provider_search_service import ProviderSearchService
-from src.tools.business.providers import BuscarPrestadoresInput
+
+
+def _load_provider_search_service_class():
+    """Import the provider search service with a minimal pydantic_ai stub."""
+    fake_pydantic_ai = ModuleType("pydantic_ai")
+    fake_pydantic_ai.RunContext = object
+
+    with patch.dict(sys.modules, {"pydantic_ai": fake_pydantic_ai}):
+        module = import_module("src.application.services.provider_search_service")
+    return module.ProviderSearchService
 
 
 def _load_orchestrator_module():
@@ -29,6 +37,7 @@ def _load_orchestrator_module():
 
 
 ai_orchestrator = _load_orchestrator_module()
+ProviderSearchService = _load_provider_search_service_class()
 
 
 def test_build_user_prompt_includes_metadata_block() -> None:
@@ -115,6 +124,7 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             memory_max_tokens=2000,
             memory_summarize_after=50,
             memory_importance_threshold=0.7,
+            agent_logging_enabled=False,
             openai_api_key=SimpleNamespace(get_secret_value=lambda: ""),
             openai_model="gpt-4o-mini",
         )
@@ -160,7 +170,7 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
                 new=SimpleNamespace(run=router_run),
             ),
             patch.object(
-                ProviderSearchService,
+                ai_orchestrator.ProviderSearchService,
                 "maybe_handle_guided_search",
                 new=AsyncMock(return_value=None),
             ),
@@ -210,11 +220,6 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
         ]
         memory_service = self._memory_service(memories)
         db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
-        state_repo = SimpleNamespace(
-            get=AsyncMock(return_value={}),
-            save=AsyncMock(),
-            delete=AsyncMock(),
-        )
         router_run = AsyncMock()
         provider_response = ai_orchestrator.AgentResponse(
             intent=ai_orchestrator.Intent.BUSCAR_SERVICIO,
@@ -225,7 +230,7 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
                     action=ai_orchestrator.MessageAction(
                         type="cta_url",
                         label="Contactar",
-                        url="https://wa.me/5491112345678?text=Hola%2C%20te%20contacto%20por%20ServiMatch%20para%20consultar%20sobre%20tus%20servicios.",
+                        url="https://api.whatsapp.com/send?phone=5491112345678&text=Hola%2C%20te%20contacto%20por%20ServiMatch%20para%20consultar%20sobre%20tus%20servicios.&type=phone_number&app_absent=0",
                     ),
                 )
             ],
@@ -250,16 +255,11 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             ),
             patch.object(
                 ai_orchestrator,
-                "EstadoRepository",
-                return_value=state_repo,
-            ),
-            patch.object(
-                ai_orchestrator,
                 "router_agent",
                 new=SimpleNamespace(run=router_run),
             ),
             patch.object(
-                ProviderSearchService,
+                ai_orchestrator.ProviderSearchService,
                 "maybe_handle_guided_search",
                 new=AsyncMock(return_value=provider_response),
             ),
@@ -273,6 +273,8 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.intent, Intent.BUSCAR_SERVICIO.value)
-        self.assertIn("Plomero Centro", response.message)
-        self.assertIn("2.1 km", response.message)
+        self.assertEqual(response.message, "Encontré 1 plomero cerca de Caballito, CABA:")
+        self.assertEqual(len(response.messages), 1)
+        self.assertIn("Plomero Centro", response.messages[0]["text"])
+        self.assertIn("2.1 km", response.messages[0]["text"])
         router_run.assert_not_awaited()
