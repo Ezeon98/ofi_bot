@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MiOficio | Tu talento merece mas</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #f7f9fc;
+            --surface: #ffffff;
+            --surface-soft: #f2f6ff;
+            --text: #0f172a;
+            --muted: #64748b;
+            --line: #e2e8f0;
+            --primary: #2f6df6;
+            --primary-deep: #1e40af;
+            --primary-soft: #dfeaff;
+            --accent: #22c55e;
+            --accent-deep: #16a34a;
+            --dark: #081226;
+            --dark-soft: #0f1d35;
+            --warning: #fbbf24;
+            --shadow: 0 20px 60px rgba(15, 23, 42, 0.10);
+            --radius-xl: 28px;
+            --radius-lg: 22px;
+            --radius-md: 16px;
+            --radius-sm: 12px;
+            --container: 1180px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            font-family: "Plus Jakarta Sans", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(47, 109, 246, 0.10), transparent 32%),
+                radial-gradient(circle at top right, rgba(34, 197, 94, 0.08), transparent 24%),
+                linear-gradient(180deg, #fbfdff 0%, #f4f8ff 55%, #ffffff 100%);
+        }
+
+        img {
+            max-width: 100%;
+            display: block;
+        }
+
+        a {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .page-shell {
+            overflow: hidden;
+            position: relative;
+        }
+
+        .page-shell::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image: radial-gradient(rgba(47, 109, 246, 0.08) 1px, transparent 1px);
+            background-size: 22px 22px;
+            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.40), transparent 82%);
+            z-index: -1;
+        }
+
+        .container {
+            width: min(var(--container), calc(100% - 32px));
+            margin: 0 auto;
+        }
+
+        .section {
+            padding: 92px 0;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.78);
+            border: 1px solid rgba(47, 109, 246, 0.14);
+            color: var(--primary);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            box-shadow: 0 10px 25px rgba(47, 109, 246, 0.08);
+        }
+
+        .section-head {
+            max-width: 680px;
+            margin: 0 auto 48px;
+            text-align: center;
+        }
+
+        .section-head h2 {
+            margin: 14px 0 12px;
+            font-size: clamp(2rem, 4vw, 3.2rem);
+            line-height: 1.02;
+            letter-spacing: -0.04em;
+        }
+
+        .section-head h2 span,
+        .hero-title span,
+        .cta-title span,
+        .mission-copy h2 span,
+        .stats-band h2 span {
+            color: var(--primary);
+        }
+
+        .section-head p,
+        .hero-copy p,
+        .dark-intro p,
+        .mission-copy p,
+        .cta-copy p,
+        .footer-copy,
+        .step-card p,
+        .card p,
+        .testimonial p,
+        .category-card small {
+            color: var(--muted);
+        }
+
+        .topbar {
+            padding: 22px 0 8px;
+        }
+
+        .topbar-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+        }
+
+        .brand-mark {
+            width: 42px;
+            height: 42px;
+            border-radius: 14px;
+            display: grid;
+            place-items: center;
+            background: linear-gradient(135deg, var(--primary), #5aa2ff);
+            color: #fff;
+            box-shadow: 0 16px 30px rgba(47, 109, 246, 0.22);
+        }
+
+        .brand-text {
+            font-size: 1.1rem;
+        }
+
+        .nav {
+            display: flex;
+            align-items: center;
+            gap: 22px;
+            color: var(--muted);
+            font-size: 0.95rem;
+        }
+
+        .nav a:hover {
+            color: var(--text);
+        }
+
+        .hero {
+            padding: 34px 0 78px;
+        }
+
+        .hero-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+            align-items: center;
+            gap: 52px;
+        }
+
+        .hero-copy {
+            max-width: 570px;
+        }
+
+        .hero-title {
+            margin: 20px 0 18px;
+            font-size: clamp(2.9rem, 7vw, 5.2rem);
+            line-height: 0.95;
+            letter-spacing: -0.065em;
+        }
+
+        .hero-copy p {
+            margin: 0 0 28px;
+            font-size: 1.06rem;
+            line-height: 1.8;
+            max-width: 540px;
+        }
+
+        .hero-meta {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 18px;
+            color: var(--muted);
+            font-size: 0.94rem;
+        }
+
+        .hero-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            margin-bottom: 28px;
+        }
+
+        .button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            min-height: 54px;
+            padding: 0 24px;
+            border-radius: 999px;
+            border: 1px solid transparent;
+            font-weight: 700;
+            font-size: 0.96rem;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+        }
+
+        .button-primary {
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+            color: #fff;
+            box-shadow: 0 18px 35px rgba(34, 197, 94, 0.25);
+        }
+
+        .button-secondary {
+            background: rgba(255, 255, 255, 0.84);
+            border-color: rgba(15, 23, 42, 0.08);
+            color: var(--text);
+        }
+
+        .hero-proof {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 18px;
+            color: var(--muted);
+            font-size: 0.92rem;
+        }
+
+        .avatar-stack {
+            display: flex;
+            align-items: center;
+            margin-right: 4px;
+        }
+
+        .avatar-stack span {
+            width: 32px;
+            height: 32px;
+            margin-left: -8px;
+            border-radius: 50%;
+            border: 2px solid #fff;
+            background: linear-gradient(135deg, #c7d2fe, #60a5fa);
+        }
+
+        .avatar-stack span:first-child {
+            margin-left: 0;
+        }
+
+        .rating {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .stars {
+            color: var(--warning);
+            letter-spacing: 0.14em;
+        }
+
+        .hero-visual {
+            position: relative;
+        }
+
+        .visual-card {
+            position: relative;
+            border-radius: var(--radius-xl);
+            overflow: hidden;
+            background: linear-gradient(160deg, #c9ddff 0%, #edf5ff 50%, #ddeeff 100%);
+            box-shadow: var(--shadow);
+            min-height: 620px;
+        }
+
+        .visual-card::after {
+            content: "";
+            position: absolute;
+            inset: auto 0 0;
+            height: 38%;
+            background: linear-gradient(180deg, transparent, rgba(8, 18, 38, 0.22));
+        }
+
+        .hero-photo {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: center;
+        }
+
+        .floating-badge {
+            position: absolute;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 14px;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.94);
+            box-shadow: 0 18px 35px rgba(15, 23, 42, 0.12);
+            backdrop-filter: blur(14px);
+        }
+
+        .badge-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--primary-soft);
+            color: var(--primary);
+            font-weight: 800;
+            font-size: 1.15rem;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+
+        .badge-icon-lightning {
+            font-size: 1.3rem;
+            transform: translateY(-1px);
+        }
+
+        .badge-icon-star {
+            font-size: 1.05rem;
+            transform: translateY(-1px);
+        }
+
+        .floating-badge strong,
+        .floating-badge span {
+            display: block;
+        }
+
+        .floating-badge span {
+            font-size: 0.78rem;
+            color: var(--muted);
+        }
+
+        .floating-badge strong {
+            font-size: 0.92rem;
+        }
+
+        .badge-top {
+            top: 26px;
+            right: -18px;
+        }
+
+        .badge-bottom {
+            right: -14px;
+            bottom: 26px;
+        }
+
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 18px;
+        }
+
+        .card {
+            padding: 28px 24px;
+            border-radius: var(--radius-lg);
+            background: rgba(255, 255, 255, 0.86);
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            box-shadow: 0 16px 35px rgba(15, 23, 42, 0.05);
+        }
+
+        .card-icon,
+        .step-icon,
+        .category-icon,
+        .stat-icon {
+            width: 46px;
+            height: 46px;
+            border-radius: 16px;
+            display: grid;
+            place-items: center;
+            font-weight: 800;
+            color: var(--primary);
+            background: linear-gradient(180deg, rgba(47, 109, 246, 0.12), rgba(47, 109, 246, 0.05));
+        }
+
+        .card h3,
+        .step-card h3,
+        .mission-metrics strong,
+        .stat strong,
+        .category-card h3,
+        .testimonial strong {
+            margin: 18px 0 10px;
+            font-size: 1.06rem;
+        }
+
+        .card p,
+        .step-card p,
+        .testimonial p,
+        .cta-copy p,
+        .mission-copy p {
+            line-height: 1.75;
+            font-size: 0.96rem;
+        }
+
+        .dark-band {
+            background:
+                radial-gradient(circle at top, rgba(47, 109, 246, 0.16), transparent 28%),
+                linear-gradient(180deg, var(--dark) 0%, #050c1c 100%);
+            color: #fff;
+        }
+
+        .dark-intro {
+            max-width: 720px;
+            margin: 0 auto 44px;
+            text-align: center;
+        }
+
+        .dark-intro h2 {
+            margin: 14px 0 12px;
+            font-size: clamp(2rem, 4vw, 3rem);
+            line-height: 1.05;
+            letter-spacing: -0.04em;
+        }
+
+        .steps-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 18px;
+        }
+
+        .step-card {
+            position: relative;
+            padding: 28px 24px 26px;
+            border-radius: var(--radius-lg);
+            background: rgba(15, 29, 53, 0.82);
+            border: 1px solid rgba(148, 163, 184, 0.14);
+            overflow: hidden;
+        }
+
+        .step-number {
+            position: absolute;
+            top: 18px;
+            right: 18px;
+            font-size: 3rem;
+            line-height: 1;
+            font-weight: 800;
+            color: rgba(255, 255, 255, 0.07);
+        }
+
+        .step-card p,
+        .dark-intro p,
+        .testimonial small,
+        .footer-links a,
+        .footer-note,
+        .mission-metrics span {
+            color: rgba(226, 232, 240, 0.72);
+        }
+
+        .category-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        .category-card {
+            padding: 22px 20px;
+            border-radius: 20px;
+            background: #fff;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            box-shadow: 0 14px 28px rgba(15, 23, 42, 0.04);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .category-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 22px 40px rgba(15, 23, 42, 0.08);
+        }
+
+        .category-card h3 {
+            margin: 16px 0 6px;
+            font-size: 1rem;
+        }
+
+        .mission-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+            gap: 38px;
+            align-items: center;
+        }
+
+        .mission-photo-wrap {
+            border-radius: var(--radius-xl);
+            overflow: hidden;
+            min-height: 420px;
+            box-shadow: var(--shadow);
+            background: linear-gradient(180deg, #4b2f16, #2e1808);
+        }
+
+        .mission-photo {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .mission-copy h2 {
+            margin: 16px 0 18px;
+            font-size: clamp(2rem, 4vw, 3.3rem);
+            line-height: 1.02;
+            letter-spacing: -0.04em;
+        }
+
+        .mission-copy p {
+            margin: 0 0 18px;
+            color: rgba(226, 232, 240, 0.76);
+        }
+
+        .mission-metrics {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 30px;
+            margin-top: 28px;
+        }
+
+        .mission-metrics strong {
+            display: block;
+            margin: 0 0 4px;
+            font-size: 2rem;
+            color: #fff;
+        }
+
+        .testimonial-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 18px;
+        }
+
+        .testimonial {
+            padding: 28px 24px;
+            border-radius: var(--radius-lg);
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            box-shadow: 0 14px 28px rgba(15, 23, 42, 0.05);
+        }
+
+        .quote-mark {
+            color: var(--primary);
+            font-size: 2rem;
+            line-height: 1;
+        }
+
+        .testimonial-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            margin-top: 24px;
+        }
+
+        .person {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .person-avatar {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            color: #fff;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary), #60a5fa);
+        }
+
+        .stats-band {
+            background: linear-gradient(135deg, #2f6df6 0%, #3d7cff 45%, #5ea3ff 100%);
+            color: #fff;
+        }
+
+        .stats-band h2 {
+            margin: 0 0 34px;
+            text-align: center;
+            font-size: clamp(1.9rem, 4vw, 3rem);
+            letter-spacing: -0.04em;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 18px;
+        }
+
+        .stat {
+            text-align: center;
+            padding: 10px 18px;
+        }
+
+        .stat-icon {
+            margin: 0 auto 14px;
+            color: #fff;
+            background: rgba(255, 255, 255, 0.14);
+        }
+
+        .stat strong {
+            display: block;
+            margin: 0 0 8px;
+            font-size: 2rem;
+            color: #fff;
+        }
+
+        .stat span {
+            color: rgba(255, 255, 255, 0.78);
+            font-size: 0.95rem;
+        }
+
+        .cta {
+            text-align: center;
+        }
+
+        .cta-shell {
+            max-width: 860px;
+            margin: 0 auto;
+            padding: 72px 36px;
+            border-radius: 34px;
+            background:
+                radial-gradient(circle at top, rgba(34, 197, 94, 0.14), transparent 30%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(244, 248, 255, 0.92));
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            box-shadow: var(--shadow);
+        }
+
+        .cta-icon {
+            width: 62px;
+            height: 62px;
+            margin: 0 auto 22px;
+            border-radius: 20px;
+            display: grid;
+            place-items: center;
+            color: var(--accent);
+            background: rgba(34, 197, 94, 0.12);
+            font-size: 1.5rem;
+        }
+
+        .cta-title {
+            margin: 0 0 18px;
+            font-size: clamp(2rem, 5vw, 3.6rem);
+            line-height: 0.98;
+            letter-spacing: -0.05em;
+        }
+
+        .cta-copy p {
+            max-width: 600px;
+            margin: 0 auto 26px;
+        }
+
+        .footer {
+            padding: 36px 0 28px;
+            background: #071123;
+            color: #fff;
+        }
+
+        .footer-grid {
+            display: grid;
+            grid-template-columns: 1.2fr repeat(3, minmax(0, 1fr));
+            gap: 28px;
+        }
+
+        .footer-brand {
+            max-width: 340px;
+        }
+
+        .footer-brand .brand-mark {
+            margin-bottom: 18px;
+        }
+
+        .footer-title {
+            margin: 0 0 14px;
+            font-size: 0.95rem;
+            font-weight: 700;
+        }
+
+        .footer-links {
+            display: grid;
+            gap: 10px;
+        }
+
+        .footer-links a:hover {
+            color: #fff;
+        }
+
+        .footer-note {
+            margin-top: 34px;
+            padding-top: 24px;
+            border-top: 1px solid rgba(148, 163, 184, 0.15);
+            display: flex;
+            justify-content: space-between;
+            gap: 18px;
+            flex-wrap: wrap;
+            font-size: 0.86rem;
+        }
+
+        @media (max-width: 1080px) {
+            .hero-grid,
+            .mission-grid,
+            .footer-grid,
+            .cards-grid,
+            .category-grid,
+            .testimonial-grid,
+            .stats-grid,
+            .steps-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .hero-grid,
+            .mission-grid {
+                gap: 28px;
+            }
+
+            .footer-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 760px) {
+            .section {
+                padding: 72px 0;
+            }
+
+            .topbar-row,
+            .hero-grid,
+            .hero-actions,
+            .cards-grid,
+            .steps-grid,
+            .category-grid,
+            .mission-grid,
+            .testimonial-grid,
+            .stats-grid,
+            .footer-grid {
+                grid-template-columns: 1fr;
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .nav {
+                flex-wrap: wrap;
+                justify-content: flex-start;
+                gap: 14px;
+            }
+
+            .hero {
+                padding-top: 20px;
+            }
+
+            .hero-title {
+                font-size: clamp(2.6rem, 14vw, 4rem);
+            }
+
+            .visual-card {
+                min-height: 420px;
+            }
+
+            .floating-badge {
+                position: static;
+                margin-top: 14px;
+            }
+
+            .cta-shell {
+                padding: 52px 22px;
+            }
+
+            .footer-note {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page-shell">
+        <header class="topbar">
+            <div class="container topbar-row">
+                <a class="brand" href="#inicio" aria-label="MiOficio">
+                    <span class="brand-mark">M</span>
+                    <span class="brand-text">MiOficio</span>
+                </a>
+                <nav class="nav" aria-label="Principal">
+                    <a href="#beneficios">Beneficios</a>
+                    <a href="#como-funciona">Como funciona</a>
+                    <a href="#categorias">Categorias</a>
+                    <a href="#testimonios">Testimonios</a>
+                </nav>
+            </div>
+        </header>
+
+        <main>
+            <section class="hero" id="inicio">
+                <div class="container hero-grid">
+                    <div class="hero-copy">
+                        <div class="eyebrow">+2.500 profesionales activos</div>
+                        <h1 class="hero-title">Tu talento <span>merece mas</span></h1>
+                        <p>MiOficio es el bot de WhatsApp que te conecta con personas que necesitan tus servicios. Mas clientes, mas trabajos, mas ingresos.</p>
+                        <div class="hero-meta">
+                            <span>Buscando</span>
+                            <strong>Albanil</strong>
+                            <span>Jardinero</span>
+                            <strong>Electricista</strong>
+                        </div>
+                        <div class="hero-actions">
+                            <a class="button button-primary" href="https://wa.me/5490000000000" target="_blank" rel="noreferrer">Escribinos por WhatsApp</a>
+                            <a class="button button-secondary" href="#beneficios">Conoce mas</a>
+                        </div>
+                        <div class="hero-proof">
+                            <div class="avatar-stack" aria-hidden="true">
+                                <span></span>
+                                <span></span>
+                                <span></span>
+                                <span></span>
+                            </div>
+                            <span>+ 2.500 profesionales</span>
+                            <span class="rating"><span class="stars">★★★★★</span> 4.9</span>
+                        </div>
+                    </div>
+
+                    <div class="hero-visual">
+                        <div class="visual-card">
+                            <img class="hero-photo js-flex-image" data-image-base="imagen1" src="imagen1.jpg" alt="Profesional de oficio sonriendo en su taller">
+                        </div>
+                        <div class="floating-badge badge-top">
+                            <span class="badge-icon badge-icon-lightning">&#9889;</span>
+                            <div>
+                                <span>Nueva solicitud</span>
+                                <strong>Electricista - Zona Sur</strong>
+                            </div>
+                        </div>
+                        <div class="floating-badge badge-bottom">
+                            <span class="badge-icon badge-icon-star">★</span>
+                            <div>
+                                <span>Nueva resena</span>
+                                <strong>5.0 - Excelente</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" id="beneficios">
+                <div class="container">
+                    <div class="section-head">
+                        <div class="eyebrow">Beneficios</div>
+                        <h2>Todo lo que necesitas para <span>crecer</span></h2>
+                        <p>Herramientas simples y poderosas que conectan tu oficio con mas oportunidades reales.</p>
+                    </div>
+
+                    <div class="cards-grid">
+                        <article class="card">
+                            <div class="card-icon">01</div>
+                            <h3>Mas clientes</h3>
+                            <p>Conectate con personas que buscan exactamente lo que vos haces, sin invertir tiempo en buscar.</p>
+                        </article>
+                        <article class="card">
+                            <div class="card-icon">02</div>
+                            <h3>Mas trabajos</h3>
+                            <p>Recibi solicitudes de servicio todos los dias. Tus oportunidades siempre tienen movimiento.</p>
+                        </article>
+                        <article class="card">
+                            <div class="card-icon">03</div>
+                            <h3>Perfiles verificados</h3>
+                            <p>Genera confianza y demuestra tu oficio con reseñas, zonas de trabajo y un perfil profesional claro.</p>
+                        </article>
+                        <article class="card">
+                            <div class="card-icon">04</div>
+                            <h3>Mejores resultados</h3>
+                            <p>Calificaciones y reputacion impulsan tu crecimiento para que cierres trabajos con mas rapidez.</p>
+                        </article>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section dark-band" id="como-funciona">
+                <div class="container">
+                    <div class="dark-intro">
+                        <div class="eyebrow">Como funciona</div>
+                        <h2>Empeza en 3 simples pasos</h2>
+                        <p>Sin apps que descargar. Sin formularios largos. Todo desde WhatsApp.</p>
+                    </div>
+
+                    <div class="steps-grid">
+                        <article class="step-card">
+                            <span class="step-number">01</span>
+                            <div class="step-icon">W</div>
+                            <h3>Escribinos por WhatsApp</h3>
+                            <p>Empeza una conversacion con nuestro bot. Rapido, simple y gratis.</p>
+                        </article>
+                        <article class="step-card">
+                            <span class="step-number">02</span>
+                            <div class="step-icon">P</div>
+                            <h3>Crea tu perfil</h3>
+                            <p>Elegi tu categoria, completa informacion clave y deja listo tu mejor perfil activo.</p>
+                        </article>
+                        <article class="step-card">
+                            <span class="step-number">03</span>
+                            <div class="step-icon">C</div>
+                            <h3>Recibi clientes</h3>
+                            <p>Empeza a recibir solicitudes de personas que buscan lo que vos ofreces.</p>
+                        </article>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" id="categorias">
+                <div class="container">
+                    <div class="section-head">
+                        <div class="eyebrow">Categorias</div>
+                        <h2>Encontra tu <span>oficio</span></h2>
+                        <p>Decenas de categorias profesionales. Miles de oportunidades esperandote.</p>
+                    </div>
+
+                    <div class="category-grid">
+                        <article class="category-card"><div class="category-icon">E</div><h3>Electricista</h3><small>155 profesionales</small></article>
+                        <article class="category-card"><div class="category-icon">P</div><h3>Plomero</h3><small>141 profesionales</small></article>
+                        <article class="category-card"><div class="category-icon">C</div><h3>Carpintero</h3><small>87 profesionales</small></article>
+                        <article class="category-card"><div class="category-icon">I</div><h3>Pintor</h3><small>126 profesionales</small></article>
+                        <article class="category-card"><div class="category-icon">G</div><h3>Gasista</h3><small>98 profesionales</small></article>
+                        <article class="category-card"><div class="category-icon">A</div><h3>Albanil</h3><small>172 profesionales</small></article>
+                        <article class="category-card"><div class="category-icon">S</div><h3>Cerrajero</h3><small>51 profesionales</small></article>
+                        <article class="category-card"><div class="category-icon">J</div><h3>Jardinero</h3><small>73 profesionales</small></article>
+                        <article class="category-card"><div class="category-icon">T</div><h3>Tecnico PC</h3><small>103 profesionales</small></article>
+                        <article class="category-card"><div class="category-icon">M</div><h3>Mudanzas</h3><small>62 profesionales</small></article>
+                        <article class="category-card"><div class="category-icon">F</div><h3>Chef / Catering</h3><small>37 profesionales</small></article>
+                        <article class="category-card"><div class="category-icon">R</div><h3>Fotografo</h3><small>49 profesionales</small></article>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section dark-band" id="mision">
+                <div class="container mission-grid">
+                    <div class="mission-photo-wrap">
+                        <img class="mission-photo js-flex-image" data-image-base="imagen2" src="imagen2.jpg" alt="Manos trabajando madera en un taller">
+                    </div>
+                    <div class="mission-copy">
+                        <div class="eyebrow">Nuestra mision</div>
+                        <h2>Detras de cada oficio hay una historia de <span>esfuerzo</span></h2>
+                        <p>En MiOficio sabemos que miles de trabajadores independientes tienen mas oportunidades cuando alguien valora su tiempo, su experiencia y su trabajo.</p>
+                        <p>Creamos esta plataforma para acercar personas con necesidades reales a profesionales listos para responder desde WhatsApp.</p>
+                        <div class="mission-metrics">
+                            <div>
+                                <strong>4,9/5</strong>
+                                <span>Satisfaccion promedio</span>
+                            </div>
+                            <div>
+                                <strong>98%</strong>
+                                <span>Tasa de conexion</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" id="testimonios">
+                <div class="container">
+                    <div class="section-head">
+                        <div class="eyebrow">Testimonios</div>
+                        <h2>Historias de <span>exito</span></h2>
+                        <p>Profesionales reales que transformaron su forma de trabajar con MiOficio.</p>
+                    </div>
+
+                    <div class="testimonial-grid">
+                        <article class="testimonial">
+                            <div class="quote-mark">“</div>
+                            <p>En dos semanas ya tenia clientes nuevos. MiOficio me cambio la forma de conseguir trabajo, simple, rapido y mas directo.</p>
+                            <div class="testimonial-footer">
+                                <div class="person">
+                                    <div class="person-avatar">C</div>
+                                    <div>
+                                        <strong>Carlos M.</strong>
+                                        <small>Electricista</small>
+                                    </div>
+                                </div>
+                                <span class="stars">★★★★★</span>
+                            </div>
+                        </article>
+                        <article class="testimonial">
+                            <div class="quote-mark">“</div>
+                            <p>Antes perdia tiempo con redes. Hoy me llegan pedidos listos para responder y cerrar desde el celular.</p>
+                            <div class="testimonial-footer">
+                                <div class="person">
+                                    <div class="person-avatar">L</div>
+                                    <div>
+                                        <strong>Laura G.</strong>
+                                        <small>Plomera</small>
+                                    </div>
+                                </div>
+                                <span class="stars">★★★★★</span>
+                            </div>
+                        </article>
+                        <article class="testimonial">
+                            <div class="quote-mark">“</div>
+                            <p>Lo mejor es que los clientes llegan solos. Ya no tengo que salir a buscar trabajo porque la plataforma me acerca oportunidades.</p>
+                            <div class="testimonial-footer">
+                                <div class="person">
+                                    <div class="person-avatar">M</div>
+                                    <div>
+                                        <strong>Martin R.</strong>
+                                        <small>Carpintero</small>
+                                    </div>
+                                </div>
+                                <span class="stars">★★★★★</span>
+                            </div>
+                        </article>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section stats-band" aria-label="Metricas principales">
+                <div class="container">
+                    <h2>Mas trabajo. Mas conexiones. <span>Mas resultados.</span></h2>
+                    <div class="stats-grid">
+                        <div class="stat"><div class="stat-icon">+</div><strong>50+</strong><span>Conexiones locales</span></div>
+                        <div class="stat"><div class="stat-icon">#</div><strong>15.000+</strong><span>Calificaciones resueltas</span></div>
+                        <div class="stat"><div class="stat-icon">⏱</div><strong>3 min</strong><span>Respuesta rapida</span></div>
+                        <div class="stat"><div class="stat-icon">◎</div><strong>2.500+</strong><span>Comunidad de profesionales</span></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section cta" id="contacto">
+                <div class="container">
+                    <div class="cta-shell">
+                        <div class="cta-icon">W</div>
+                        <h2 class="cta-title">Unite gratis y empeza a recibir mas trabajos <span>hoy mismo</span></h2>
+                        <div class="cta-copy">
+                            <p>Sin costo, sin descargas, sin complicaciones. Todo esta en WhatsApp. Tu proximo cliente esta a un mensaje de distancia.</p>
+                        </div>
+                        <a class="button button-primary" href="https://wa.me/5490000000000" target="_blank" rel="noreferrer">Escribenos por WhatsApp - Registrate ahora</a>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <div class="container">
+                <div class="footer-grid">
+                    <div class="footer-brand">
+                        <div class="brand-mark">M</div>
+                        <p class="footer-copy">Soluciones que conectan trabajadores reales con personas que buscan resolver necesidades concretas desde WhatsApp.</p>
+                    </div>
+                    <div>
+                        <p class="footer-title">Plataforma</p>
+                        <div class="footer-links">
+                            <a href="#como-funciona">Como funciona</a>
+                            <a href="#categorias">Categorias</a>
+                            <a href="#beneficios">Beneficios</a>
+                            <a href="#testimonios">Testimonios</a>
+                        </div>
+                    </div>
+                    <div>
+                        <p class="footer-title">Empresa</p>
+                        <div class="footer-links">
+                            <a href="#mision">Sobre nosotros</a>
+                            <a href="#contacto">Contacto</a>
+                            <a href="#contacto">Terminos y condiciones</a>
+                            <a href="#contacto">Politica de privacidad</a>
+                        </div>
+                    </div>
+                    <div>
+                        <p class="footer-title">Conecta</p>
+                        <div class="footer-links">
+                            <a href="https://wa.me/5490000000000" target="_blank" rel="noreferrer">WhatsApp</a>
+                            <a href="#contacto">Instagram</a>
+                            <a href="#contacto">Facebook</a>
+                            <a href="#contacto">LinkedIn</a>
+                        </div>
+                    </div>
+                </div>
+                <div class="footer-note">
+                    <span>© 2026 MiOficio. Todos los derechos reservados.</span>
+                    <span>Hecho para conectar profesionales independientes con nuevos clientes.</span>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <script>
+        (function () {
+            var formats = ["jpg", "jpeg", "png", "webp", "avif"];
+
+            function tryNext(image, index) {
+                var base = image.getAttribute("data-image-base");
+                if (!base || index >= formats.length) {
+                    return;
+                }
+
+                image.src = base + "." + formats[index];
+                image.onerror = function () {
+                    tryNext(image, index + 1);
+                };
+            }
+
+            document.querySelectorAll(".js-flex-image").forEach(function (image) {
+                image.onerror = function () {
+                    tryNext(image, 1);
+                };
+            });
+        }());
+    </script>
+</body>
+</html>

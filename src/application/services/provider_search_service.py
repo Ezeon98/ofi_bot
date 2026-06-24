@@ -144,6 +144,23 @@ class ProviderSearchService:
                 self._log(turn_id, "guided_search.awaiting_need.no_match", message_preview=message[:80])
                 return None
             if search_location is None:
+                inline_zone = self._extract_inline_zone(message)
+                if inline_zone is not None:
+                    search_location = {"barrio": inline_zone}
+                    self._log(
+                        turn_id,
+                        "guided_search.awaiting_need.inline_zone",
+                        rubro=rubro,
+                        typed_zone=inline_zone,
+                    )
+                    return await self._build_search_results_response(
+                        turn_id=turn_id,
+                        deps=deps,
+                        memory_service=memory_service,
+                        rubro=rubro,
+                        location=search_location,
+                        detail=detail,
+                    )
                 self._log(turn_id, "guided_search.awaiting_need.need_zone", rubro=rubro)
                 await self._save_search_state(state_repo, user_id, "awaiting_zone", rubro)
                 return self._build_location_request_response(rubro)
@@ -190,7 +207,10 @@ class ProviderSearchService:
             await self._save_search_state(state_repo, user_id, "awaiting_need")
             return AgentResponse(
                 intent=Intent.BUSCAR_SERVICIO,
-                message="Decime qué servicio necesitás y te busco opciones cerca.",
+                message=(
+                    "Decime qué servicio necesitás y en qué zona lo buscás, "
+                    "o compartime tu ubicación."
+                ),
                 confidence=1.0,
                 requires_action=False,
             )
@@ -319,7 +339,7 @@ class ProviderSearchService:
             ciudad=location.get("ciudad"),
             lat=location.get("lat"),
             lon=location.get("lon"),
-            limit=5,
+            limit=3,
         )
         ctx = SimpleNamespace(deps=deps)
         self._log(
@@ -464,7 +484,7 @@ class ProviderSearchService:
     ) -> tuple[str, list[Message]]:
         """Render the provider shortlist as individual messages with contact buttons."""
         count = len(providers)
-        first_message = f"Encontré {count} {rubro} cerca de {location_label}:"
+        first_message = f"Encontramos {count} {rubro} que podrían ayudarte en {location_label}:"
 
         messages: list[Message] = []
         for provider in providers:
@@ -502,7 +522,10 @@ class ProviderSearchService:
         metadata: dict[str, Any] | None,
     ) -> bool:
         """Return True when the message explicitly starts a service search."""
-        if metadata and metadata.get("selected_id") == SEARCH_BUTTON_ID:
+        if metadata and (
+            metadata.get("selected_id") == SEARCH_BUTTON_ID
+            or metadata.get("button_id") == SEARCH_BUTTON_ID
+        ):
             return True
 
         normalized = ProviderSearchService._normalize_message(message)

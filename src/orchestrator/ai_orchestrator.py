@@ -40,6 +40,7 @@ from src.memory.extractor import MemoryExtractor
 from src.memory.models import MemoryConfig
 from src.memory.service import MemoryService
 from src.memory.summarizer import MemorySummarizer
+from src.application.services.provider_registration_service import ProviderRegistrationService
 from src.application.services.provider_search_service import ProviderSearchService
 from src.utils.agent_logger import AgentLogger
 
@@ -86,6 +87,10 @@ class AIOrchestrator:
         self._openai = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
         self._context_builder = ContextBuilder(max_tokens=self._memory_config.max_tokens)
         self._alog = AgentLogger(enabled=settings.agent_logging_enabled)
+        self._provider_registration = ProviderRegistrationService(
+            memory_config=self._memory_config,
+            agent_logger=self._alog,
+        )
         self._provider_search = ProviderSearchService(
             memory_config=self._memory_config,
             agent_logger=self._alog,
@@ -155,7 +160,39 @@ class AIOrchestrator:
             current_message_metadata=metadata,
         )
 
-        # ── 4b. Guided-search shortcut ────────────────────────────────────
+        # ── 4b. Guided provider-registration shortcut ─────────────────────
+        registration_response = (
+            await self._provider_registration.maybe_handle_registration(
+                user_id=user_id,
+                message=message,
+                deps=deps,
+                memory_service=memory_service,
+                metadata=metadata,
+                turn_id=turn_id,
+            )
+        )
+        if registration_response is not None:
+            self._alog.info(
+                turn_id, "pipeline.shortcut",
+                intent=registration_response.intent.value,
+                response_preview=registration_response.message[:120],
+                elapsed_ms=(time.monotonic() - _start) * 1000,
+            )
+            if context.conversation_id is not None:
+                await memory_service.process_interaction(
+                    user_id=user_id,
+                    user_message=message,
+                    assistant_response=registration_response.message,
+                    conversation_id=context.conversation_id,
+                    intent=registration_response.intent.value,
+                )
+            await db.commit()
+            return self._to_orchestrator_response(
+                registration_response,
+                source="shortcut",
+            )
+
+        # ── 4c. Guided-search shortcut ────────────────────────────────────
         shortcut_response = await self._provider_search.maybe_handle_guided_search(
             user_id=user_id,
             message=message,

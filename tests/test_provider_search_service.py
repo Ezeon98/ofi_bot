@@ -68,7 +68,7 @@ class ProviderSearchServiceFormattingTests(IsolatedAsyncioTestCase):
 
         formatted = await service.maybe_reformat_provider_response(response)
 
-        self.assertEqual(formatted.message, "Encontré 2 electricista cerca de Centro:")
+        self.assertEqual(formatted.message, "Encontramos 2 electricista que podrían ayudarte en Centro:")
         self.assertEqual(len(formatted.messages), 2)
         self.assertEqual(formatted.messages[0].text.splitlines()[0], "👤 Electricista Uno")
         self.assertEqual(formatted.messages[1].text.splitlines()[0], "👤 Electricista Dos")
@@ -79,6 +79,89 @@ class ProviderSearchServiceFormattingTests(IsolatedAsyncioTestCase):
 class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
     """Validate guided-search shortcuts for direct provider requests."""
 
+    async def test_post_terms_button_starts_search_and_requests_trade_and_zone(self) -> None:
+        """The onboarding search button should ask for specialty and zone."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+
+        with patch.object(
+            provider_search_service,
+            "EstadoRepository",
+            return_value=SimpleNamespace(
+                get=AsyncMock(return_value={}),
+                save=AsyncMock(),
+                delete=AsyncMock(),
+            ),
+        ) as state_repo_patch:
+            response = await service.maybe_handle_guided_search(
+                user_id="5491162527111",
+                message="Busco un Servicio",
+                metadata={
+                    "message_type": "interactive",
+                    "button_id": provider_search_service.SEARCH_BUTTON_ID,
+                },
+                deps=SimpleNamespace(db=object()),
+                memory_service=SimpleNamespace(),
+                memories=[],
+                turn_id="turn-button-1",
+            )
+
+        self.assertIsNotNone(response)
+        self.assertEqual(response.intent, Intent.BUSCAR_SERVICIO)
+        self.assertIn("qué servicio necesitás", response.message)
+        self.assertIn("qué zona", response.message)
+        state_repo_patch.return_value.save.assert_awaited_once()
+
+    async def test_awaiting_need_can_use_trade_and_zone_from_same_reply(self) -> None:
+        """A follow-up with both rubro and zone should skip the extra zone prompt."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+        expected = AgentResponse(
+            intent=Intent.BUSCAR_SERVICIO,
+            message="Encontré opciones cerca de caballito.",
+            confidence=1.0,
+            entities={"rubro": "electricista", "barrio": "caballito"},
+            requires_action=True,
+        )
+
+        with (
+            patch.object(
+                provider_search_service,
+                "EstadoRepository",
+                return_value=SimpleNamespace(
+                    get=AsyncMock(
+                        return_value={
+                            "estado": provider_search_service.SEARCH_STATE_NAME,
+                            "paso": "awaiting_need",
+                        }
+                    ),
+                    save=AsyncMock(),
+                    delete=AsyncMock(),
+                ),
+            ),
+            patch.object(
+                ProviderSearchService,
+                "_build_search_results_response",
+                new=AsyncMock(return_value=expected),
+            ) as build_response_mock,
+        ):
+            response = await service.maybe_handle_guided_search(
+                user_id="5491162527111",
+                message="Electricista en Caballito",
+                metadata={"message_type": "text"},
+                deps=SimpleNamespace(db=object()),
+                memory_service=SimpleNamespace(),
+                memories=[],
+                turn_id="turn-inline-zone",
+            )
+
+        self.assertIs(response, expected)
+        _, kwargs = build_response_mock.await_args
+        self.assertEqual(kwargs["rubro"], "electricista")
+        self.assertEqual(kwargs["location"], {"barrio": "caballito"})
+
     async def test_initial_search_uses_inline_zone_from_buscarme_message(self) -> None:
         """The first search message should reuse the typed zone and skip the agent path."""
         service = ProviderSearchService(
@@ -86,7 +169,7 @@ class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
         )
         expected = AgentResponse(
             intent=Intent.BUSCAR_SERVICIO,
-            message="Encontré 2 electricistas cerca de caballito:",
+            message="Encontramos 2 electricistas que podrían ayudarte en caballito:",
             messages=[
                 Message(text="👤 Maria Electricista"),
                 Message(text="👤 Sofia Tecnica"),
@@ -135,7 +218,7 @@ class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
         )
         expected = AgentResponse(
             intent=Intent.BUSCAR_SERVICIO,
-            message="Encontré 2 electricistas cerca de caballito:",
+            message="Encontramos 2 electricistas que podrían ayudarte en caballito:",
             messages=[
                 Message(text="👤 Maria Electricista"),
                 Message(text="👤 Sofia Tecnica"),

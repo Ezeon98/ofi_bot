@@ -54,7 +54,7 @@ class BuscarPrestadoresInput(BaseModel):
 
 class CrearPrestadorInput(BaseModel):
     nombre: str
-    rubros: list[str] = Field(min_length=1, max_length=2)
+    rubros: list[str] = Field(min_length=1, max_length=5)
     barrio: str | None = Field(default=None, description="Neighborhood or district")
     ciudad: str | None = Field(default=None, description="City or locality")
     disponibilidad: str | None = None
@@ -82,15 +82,26 @@ async def buscar_prestadores(
 
     Returns up to `limit` results, verified providers first.
     """
+    effective_params = _sanitize_search_params(params)
+
     # ── Log search entry ──────────────────────────────────────────────
     user_id = ctx.deps.user_id if hasattr(ctx.deps, "user_id") else "?"
     logger.info(
         "PROVIDER_SEARCH user=%s rubro=%r barrio=%r ciudad=%r lat=%r lon=%r solo_ver=%d limit=%d",
-        user_id, params.rubro, params.barrio, params.ciudad, params.lat, params.lon,
-        params.solo_verificados, params.limit,
+        user_id,
+        effective_params.rubro,
+        effective_params.barrio,
+        effective_params.ciudad,
+        effective_params.lat,
+        effective_params.lon,
+        effective_params.solo_verificados,
+        effective_params.limit,
     )
 
-    origin_lat, origin_lon = await _resolve_search_origin(ctx.deps.current_message_metadata, params)
+    origin_lat, origin_lon = await _resolve_search_origin(
+        ctx.deps.current_message_metadata,
+        effective_params,
+    )
 
     logger.info(
         "PROVIDER_ORIGIN user=%s origin_lat=%r origin_lon=%r",
@@ -107,30 +118,38 @@ async def buscar_prestadores(
         stmt = stmt.where(ProviderModel.badge_activo == True)  # noqa: E712
 
     # Apply text-based location filter using barrio/ciudad
-    use_text_location_filter = _should_apply_text_location_filter(params.barrio, params.ciudad, origin_lat, origin_lon)
+    use_text_location_filter = _should_apply_text_location_filter(
+        effective_params.barrio,
+        effective_params.ciudad,
+        origin_lat,
+        origin_lon,
+    )
     logger.info(
         "PROVIDER_FILTER user=%s use_text_location=%s barrio=%s ciudad=%s",
-        user_id, use_text_location_filter, params.barrio, params.ciudad,
+        user_id,
+        use_text_location_filter,
+        effective_params.barrio,
+        effective_params.ciudad,
     )
 
     if use_text_location_filter:
         location_filters = []
-        if params.barrio:
-            barrio_term = f"%{params.barrio}%"
+        if effective_params.barrio:
+            barrio_term = f"%{effective_params.barrio}%"
             location_filters.append(ProviderModel.barrio.ilike(barrio_term))
             location_filters.append(ProviderModel.ciudad.ilike(barrio_term))
-        if params.ciudad:
-            ciudad_term = f"%{params.ciudad}%"
+        if effective_params.ciudad:
+            ciudad_term = f"%{effective_params.ciudad}%"
             location_filters.append(ProviderModel.barrio.ilike(ciudad_term))
             location_filters.append(ProviderModel.ciudad.ilike(ciudad_term))
         if location_filters:
             stmt = stmt.where(or_(*location_filters))
 
-    if params.rubro:
-        rubro_terms = _build_rubro_search_terms(params.rubro)
+    if effective_params.rubro:
+        rubro_terms = _build_rubro_search_terms(effective_params.rubro)
         logger.info(
             "PROVIDER_RUBRO user=%s rubro=%r rubro_terms=%s",
-            user_id, params.rubro, rubro_terms,
+            user_id, effective_params.rubro, rubro_terms,
         )
         provider_ids_for_trade = (
             select(ProviderTradeModel.provider_id)
@@ -160,7 +179,7 @@ async def buscar_prestadores(
             ProviderModel.badge_activo.desc(),
             ProviderModel.plan.desc(),
         )
-        .limit(max(params.limit * 3, 15))
+        .limit(max(effective_params.limit * 3, 15))
     )
 
     rows = list(await ctx.deps.db.execute(stmt))
@@ -203,7 +222,7 @@ async def buscar_prestadores(
             item["distance_km"] if item["distance_km"] is not None else float("inf"),
         )
     )
-    final = results[: params.limit]
+    final = results[: effective_params.limit]
     logger.info(
         "PROVIDER_RESULT user=%s final_count=%d names=%r",
         user_id, len(final), [r["nombre"] for r in final],
@@ -221,19 +240,21 @@ async def crear_prestador(
     """
     from sqlalchemy import select as sa_select
 
+    usuario_id = await _resolve_usuario_id(ctx.deps.db, ctx.deps.user_id)
+    if usuario_id is None:
+        return {"error": "No se encontró el usuario para crear el perfil de prestador."}
+
     # Prevent duplicates
     existing = await ctx.deps.db.scalar(
         sa_select(ProviderModel).where(
-            ProviderModel.usuario_id == int(ctx.deps.user_id)
-            if ctx.deps.user_id.isdigit()
-            else ProviderModel.usuario_id == 0  # fallback: telefono lookup needed
+            ProviderModel.usuario_id == usuario_id
         )
     )
     if existing:
         return {"error": "Ya existe un perfil de prestador para este usuario.", "id": existing.id}
 
     provider = ProviderModel(
-        usuario_id=int(ctx.deps.user_id) if ctx.deps.user_id.isdigit() else 0,
+        usuario_id=usuario_id,
         nombre=params.nombre,
         rubros=json.dumps(params.rubros, ensure_ascii=False),
         ciudad=params.ciudad,
@@ -254,6 +275,10 @@ async def actualizar_prestador(
     params: ActualizarPrestadorInput,
 ) -> dict[str, Any]:
     """Update a single field of the current user's provider profile."""
+    usuario_id = await _resolve_usuario_id(ctx.deps.db, ctx.deps.user_id)
+    if usuario_id is None:
+        return {"error": "No se encontró perfil de prestador para este usuario."}
+
     allowed_fields = {"disponibilidad", "experiencia", "barrio", "ciudad", "rubros"}
     if params.field not in allowed_fields:
         return {"error": f"Campo no permitido: {params.field}"}
@@ -267,11 +292,7 @@ async def actualizar_prestador(
 
     result = await ctx.deps.db.execute(
         update(ProviderModel)
-        .where(
-            ProviderModel.usuario_id == int(ctx.deps.user_id)
-            if ctx.deps.user_id.isdigit()
-            else ProviderModel.usuario_id == -1
-        )
+        .where(ProviderModel.usuario_id == usuario_id)
         .values(**{params.field: value})
         .returning(ProviderModel.id)
     )
@@ -286,12 +307,12 @@ async def consultar_prestador(
     _params: ConsultarPrestadorInput,
 ) -> dict[str, Any]:
     """Return the current user's provider profile, if any."""
+    usuario_id = await _resolve_usuario_id(ctx.deps.db, ctx.deps.user_id)
+    if usuario_id is None:
+        return {"error": "No tenés un perfil de prestador registrado aún."}
+
     row = await ctx.deps.db.scalar(
-        select(ProviderModel).where(
-            ProviderModel.usuario_id == int(ctx.deps.user_id)
-            if ctx.deps.user_id.isdigit()
-            else ProviderModel.usuario_id == -1
-        )
+        select(ProviderModel).where(ProviderModel.usuario_id == usuario_id)
     )
     if row is None:
         return {"error": "No tenés un perfil de prestador registrado aún."}
@@ -335,6 +356,23 @@ async def _batch_provider_trade_names(
     for pid, name in rows:
         result.setdefault(pid, []).append(name)
     return result
+
+
+async def _resolve_usuario_id(db: Any, raw_user_id: str) -> int | None:
+    """Resolve the DB user id from the bot user identifier.
+
+    The bot layer passes the sender phone number as user_id. Some internal call
+    sites may still pass a numeric UsuarioModel.id, so we fall back to that only
+    if there is no user row with that phone.
+    """
+    usuario_id = await db.scalar(
+        select(UsuarioModel.id).where(UsuarioModel.telefono == raw_user_id)
+    )
+    if usuario_id is not None:
+        return int(usuario_id)
+    if raw_user_id.isdigit():
+        return int(raw_user_id)
+    return None
 
 
 async def _provider_trade_names(db: Any, provider_id: int, rubros_json: str) -> list[str]:
@@ -395,6 +433,70 @@ def _build_location_label(barrio: str | None, ciudad: str | None) -> str | None:
     """Build a human-readable location label from barrio and ciudad."""
     parts = [part for part in [barrio, ciudad] if isinstance(part, str) and part]
     return ", ".join(parts) if parts else None
+
+
+def _sanitize_search_params(
+    params: BuscarPrestadoresInput,
+) -> BuscarPrestadoresInput:
+    """Normalize location fields so oficio text does not leak into barrio/ciudad."""
+    barrio, ciudad = _sanitize_location_fields(
+        params.rubro,
+        params.barrio,
+        params.ciudad,
+    )
+    if barrio == params.barrio and ciudad == params.ciudad:
+        return params
+    return params.model_copy(update={"barrio": barrio, "ciudad": ciudad})
+
+
+def _sanitize_location_fields(
+    rubro: str,
+    barrio: str | None,
+    ciudad: str | None,
+) -> tuple[str | None, str | None]:
+    """Strip repeated oficio text from free-text location fields."""
+    normalized_rubro = _normalize_rubro_text(rubro)
+    return (
+        _sanitize_location_field(normalized_rubro, barrio),
+        _sanitize_location_field(normalized_rubro, ciudad),
+    )
+
+
+def _sanitize_location_field(
+    normalized_rubro: str,
+    value: str | None,
+) -> str | None:
+    """Keep only the location fragment when the field includes a full user query."""
+    if not value:
+        return value
+
+    compact = re.sub(r"\s+", " ", value.strip())
+    if not compact:
+        return None
+
+    normalized_value = _normalize_rubro_text(compact)
+    if not normalized_value:
+        return compact
+
+    location_fragment = _extract_location_fragment(normalized_value)
+    if location_fragment is not None:
+        return location_fragment.title()
+
+    if normalized_rubro and normalized_value.startswith(normalized_rubro):
+        remainder = normalized_value[len(normalized_rubro):].strip(" ,.-")
+        if remainder:
+            return remainder.title()
+
+    return compact
+
+
+def _extract_location_fragment(text: str) -> str | None:
+    """Return the suffix after common Spanish location connectors."""
+    match = re.search(r"\b(?:en|por|para|cerca de|zona de|barrio de|localidad de)\b\s+(.+)", text)
+    if match is None:
+        return None
+    fragment = match.group(1).strip(" .,!?:;")
+    return fragment or None
 
 
 def _should_apply_text_location_filter(

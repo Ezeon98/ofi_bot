@@ -74,9 +74,9 @@ async def procesar_texto(
         elapsed_ms=round(elapsed_ms, 1),
         response_preview=response.message[:120],
     )
-    # Provider cards are already split per message. Do not send the summary
-    # text as a separate WhatsApp message or we break the one-card-per-provider UI.
     if response.messages:
+        if response.message:
+            await enviar_mensaje(sender, response.message)
         await _send_additional_messages(sender, response.messages)
         return
 

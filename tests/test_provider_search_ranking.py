@@ -23,6 +23,19 @@ providers = _load_providers_module()
 class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
     """Validate ranking behavior when origin coordinates are available."""
 
+    def test_search_params_strip_trade_text_from_barrio(self) -> None:
+        """Barrio inputs contaminated with the rubro should keep only the zone."""
+        params = providers.BuscarPrestadoresInput(
+            rubro="electricistas",
+            barrio="Electricista en Caballito",
+            limit=3,
+        )
+
+        sanitized = providers._sanitize_search_params(params)
+
+        self.assertEqual(sanitized.barrio, "Caballito")
+        self.assertIsNone(sanitized.ciudad)
+
     async def test_rubro_search_expands_profession_terms_for_legacy_labels(self) -> None:
         """Searching 'plomero' should still match a provider stored as 'Plomeria'."""
         palermo_provider = SimpleNamespace(

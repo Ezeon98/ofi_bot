@@ -65,15 +65,15 @@ async def send_post_terms_service_choice(sender: str) -> None:
     """Ask the user whether they offer or seek services."""
     await enviar_botones_respuesta(
         sender,
-        "Gracias. Registramos tu aceptación. ¿Ofrecés servicios o buscás servicios?",
+        "Gracias. Registramos tu aceptación. ¿Qué querés hacer ahora?",
         [
             {
                 "id": POST_TERMS_OFFER_SERVICES_BUTTON_ID,
-                "title": "Ofrezco servicios",
+                "title": "Quiero ofrecer mis servicios",
             },
             {
                 "id": POST_TERMS_SEEK_SERVICES_BUTTON_ID,
-                "title": "Busco servicios",
+                "title": "Busco un Servicio",
             },
         ],
     )
@@ -93,7 +93,6 @@ async def handle_terms_gate(
     selected_button_id = button_reply_id(message)
     if selected_button_id == TERMS_ACCEPT_BUTTON_ID:
         await mark_accepted()
-        await enviar_mensaje(sender, "Gracias. Registramos tu aceptación.")
         await on_accept()
         return True
 

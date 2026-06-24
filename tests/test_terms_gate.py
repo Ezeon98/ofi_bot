@@ -80,7 +80,7 @@ class TermsGateTests(IsolatedAsyncioTestCase):
 
         self.assertTrue(handled)
         uow.usuarios.mark_terms_accepted.assert_awaited_once_with()
-        enviar_mensaje_mock.assert_awaited_once()
+        enviar_mensaje_mock.assert_not_awaited()
         on_accept.assert_awaited_once_with()
         enviar_terminos_mock.assert_not_awaited()
 
@@ -95,15 +95,15 @@ class TermsGateTests(IsolatedAsyncioTestCase):
 
         enviar_botones_mock.assert_awaited_once_with(
             "5491112345678",
-            "Gracias. Registramos tu aceptación. ¿Ofrecés servicios o buscás servicios?",
+            "Gracias. Registramos tu aceptación. ¿Qué querés hacer ahora?",
             [
                 {
                     "id": terms_gate.POST_TERMS_OFFER_SERVICES_BUTTON_ID,
-                    "title": "Ofrezco servicios",
+                    "title": "Quiero ofrecer mis servicios",
                 },
                 {
                     "id": terms_gate.POST_TERMS_SEEK_SERVICES_BUTTON_ID,
-                    "title": "Busco servicios",
+                    "title": "Busco un Servicio",
                 },
             ],
         )

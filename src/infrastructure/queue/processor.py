@@ -5,13 +5,15 @@ from __future__ import annotations
 import logging
 import os
 import time
+import uuid
 
 import redis
 
 from src.infrastructure.config import get_settings
 from src.infrastructure.container import UnitOfWork
 from src.infrastructure.database.session import get_session_factory
-from src.infrastructure.external.whatsapp_client import enviar_mensaje
+from src.infrastructure.external.voice_ai import transcribir_audio
+from src.infrastructure.external.whatsapp_client import descargar_media, enviar_mensaje
 from src.presentation.bot.handlers.location import reverse_geocode_location
 from src.presentation.bot.router import procesar_texto
 from src.presentation.bot.terms_gate import (
@@ -24,6 +26,8 @@ from src.utils.rate_limiter import check_rate_limit
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+AUDIO_MAX_SECONDS = 30
 
 # ── Deduplication via Redis ───────────────────────────────────────────────────
 redis_client = redis.Redis(
@@ -45,6 +49,73 @@ def is_duplicate(msg_id: str) -> bool:
 
 def is_old_message(message_timestamp: int) -> bool:
     return time.time() - message_timestamp > 600  # 10 min
+
+
+def get_audio_duration(path: str) -> float:
+    """Return audio duration in seconds using mutagen when available."""
+    try:
+        from mutagen import File as MutagenFile  # noqa: PLC0415
+
+        audio = MutagenFile(path)
+        if audio is not None and audio.info is not None:
+            return float(audio.info.length)
+    except Exception:
+        logger.exception("Could not determine audio duration for %s", path)
+    return 0.0
+
+
+async def _process_audio_message(
+    uow: UnitOfWork,
+    sender: str,
+    message: dict,
+    msg_id: str,
+) -> None:
+    """Download, validate, transcribe and route an inbound audio message."""
+    media_id = message.get("audio", {}).get("id", "")
+    if not media_id:
+        logger.warning("Audio message without media id from %s", sender)
+        await enviar_mensaje(sender, "No pude descargar tu audio. Intentá de nuevo.")
+        return
+
+    archivo = os.path.join(
+        settings.tmp_dir,
+        f"audio_{sender}_{uuid.uuid4().hex}.ogg",
+    )
+    try:
+        await descargar_media(media_id, archivo)
+        duration = get_audio_duration(archivo)
+        if duration > AUDIO_MAX_SECONDS:
+            await enviar_mensaje(
+                sender,
+                (
+                    f"⚠️ El audio es demasiado largo ({int(duration)}s). "
+                    f"El máximo es de {AUDIO_MAX_SECONDS} segundos."
+                ),
+            )
+            return
+
+        texto = await transcribir_audio(archivo)
+        if not texto:
+            await enviar_mensaje(
+                sender,
+                (
+                    "🎙️ No pude entender el audio. Intentá de nuevo hablando "
+                    "más claro o mandame el mensaje por texto."
+                ),
+            )
+            return
+
+        logger.info("Audio transcripto de %s: %s", sender, texto[:80])
+        await procesar_texto(
+            uow,
+            sender,
+            texto,
+            msg_id,
+            metadata={"message_type": "audio", "media_id": media_id},
+        )
+    finally:
+        if os.path.exists(archivo):
+            os.remove(archivo)
 
 
 async def process_webhook_entries(body: dict) -> None:
@@ -173,9 +244,9 @@ async def _handle_entries(uow: UnitOfWork, body: dict) -> None:
                                 title = interactive["button_reply"].get("title", btn_id)
                                 synthetic_text = title
                                 if btn_id == POST_TERMS_SEEK_SERVICES_BUTTON_ID:
-                                    synthetic_text = "Quiero buscar servicios"
+                                    synthetic_text = "Busco un servicio"
                                 elif btn_id == POST_TERMS_OFFER_SERVICES_BUTTON_ID:
-                                    synthetic_text = "Quiero ofrecer servicios"
+                                    synthetic_text = "Quiero ofrecer mis servicios"
                                 await procesar_texto(
                                     uow,
                                     sender,
@@ -184,10 +255,14 @@ async def _handle_entries(uow: UnitOfWork, body: dict) -> None:
                                     metadata={
                                         "message_type": "interactive",
                                         "interactive_type": "button_reply",
+                                        "selected_id": btn_id,
+                                        "selected_title": title,
                                         "button_id": btn_id,
                                         "button_title": title,
                                     },
                                 )
+                        case "audio":
+                            await _process_audio_message(uow, sender, message, msg_id)
                 except Exception as exc:
                     logger.exception("Error procesando mensaje de %s", sender)
                     await enviar_mensaje(

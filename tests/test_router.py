@@ -25,6 +25,8 @@ def _load_router_module():
         async def process(self, **_kwargs):
             return SimpleNamespace(
                 message="stub",
+                source="orchestrator",
+                messages=[],
                 intent=Intent.CONVERSACION_GENERAL.value,
                 confidence=1.0,
                 entities=None,
@@ -50,6 +52,7 @@ class RouterShortcutTests(IsolatedAsyncioTestCase):
             process=AsyncMock(
                 return_value=SimpleNamespace(
                     message="respuesta ai",
+                    source="orchestrator",
                     messages=[],
                     intent=Intent.CONVERSACION_GENERAL.value,
                     confidence=1.0,
@@ -115,12 +118,26 @@ class RouterShortcutTests(IsolatedAsyncioTestCase):
         enviar_mensaje.assert_awaited_once()
         self.assertEqual(enviar_boton_cta.await_count, 3)
 
-    async def test_provider_results_send_one_cta_per_message(self) -> None:
-        """Provider cards should be delivered without an extra summary text."""
+    async def test_provider_results_send_summary_before_provider_cards(self) -> None:
+        """Provider cards should be delivered after the summary text."""
+        sent_events: list[tuple[str, str]] = []
+
+        async def _capture_message(_sender: str, text: str) -> None:
+            sent_events.append(("message", text))
+
+        async def _capture_cta(
+            _sender: str,
+            body_text: str,
+            display_text: str,
+            url: str,
+        ) -> None:
+            sent_events.append(("cta", body_text))
+
         orchestrator = SimpleNamespace(
             process=AsyncMock(
                 return_value=SimpleNamespace(
                     message="Encontré 2 electricistas cerca de Centro:",
+                    source="orchestrator",
                     messages=[
                         {
                             "text": "👤 Electricista Uno\n✅ Verificado",
@@ -162,12 +179,12 @@ class RouterShortcutTests(IsolatedAsyncioTestCase):
             patch.object(
                 router,
                 "enviar_mensaje",
-                new=AsyncMock(),
+                new=AsyncMock(side_effect=_capture_message),
             ) as enviar_mensaje_mock,
             patch.object(
                 router,
                 "enviar_boton_cta",
-                new=AsyncMock(),
+                new=AsyncMock(side_effect=_capture_cta),
             ) as enviar_boton_cta_mock,
         ):
             uow = SimpleNamespace(_session=object())
@@ -179,5 +196,10 @@ class RouterShortcutTests(IsolatedAsyncioTestCase):
                 {"message_type": "text"},
             )
 
-        enviar_mensaje_mock.assert_not_awaited()
+        enviar_mensaje_mock.assert_awaited_once_with(
+            "5491112345678",
+            "Encontré 2 electricistas cerca de Centro:",
+        )
         self.assertEqual(enviar_boton_cta_mock.await_count, 2)
+        self.assertEqual(sent_events[0], ("message", "Encontré 2 electricistas cerca de Centro:"))
+        self.assertEqual(sent_events[1][0], "cta")
