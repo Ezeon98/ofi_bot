@@ -288,11 +288,37 @@ class AIOrchestrator:
             providers=tool_providers,
         )
 
+        # ── 7b. Persist search entities to memory (barrio, ciudad, rubro) ────
+        # The shortcut path persists these via _persist_search_location, but the
+        # LLM agent path must also persist them so they're available for future
+        # searches. The MemoryExtractor is explicitly told to skip search_* keys.
+        if agent_response.intent == Intent.BUSCAR_SERVICIO and agent_response.entities:
+            search_entities = agent_response.entities
+            location = {}
+            barrio = search_entities.get("barrio")
+            ciudad = search_entities.get("ciudad")
+            if isinstance(barrio, str) and barrio:
+                location["barrio"] = barrio
+            if isinstance(ciudad, str) and ciudad:
+                location["ciudad"] = ciudad
+            if location:
+                await self._provider_search.persist_search_location(
+                    memory_service, usuario_id, location,
+                )
+            # Also persist rubro as a general user fact so it's memorable
+            rubro = search_entities.get("rubro")
+            if isinstance(rubro, str) and rubro:
+                await memory_service.upsert_memory(
+                    usuario_id, "rubro", rubro, importance=0.8,
+                )
+
         # ── 8. Persist ────────────────────────────────────────────────────
         try:
             if context.conversation_id is not None:
                 await memory_service.process_interaction(
                     user_id=usuario_id,
+                    user_message=message,
+                    assistant_response=agent_response.message,
                     conversation_id=context.conversation_id,
                     intent=agent_response.intent.value,
                 )

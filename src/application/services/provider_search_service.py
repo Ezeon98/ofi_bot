@@ -403,6 +403,20 @@ class ProviderSearchService:
             return
         await self._persist_search_location(memory_service, user_id, location)
 
+    async def persist_search_location(
+        self,
+        memory_service: MemoryService,
+        user_id: int,
+        location: dict[str, Any],
+    ) -> None:
+        """Public entry point to persist a search location dict to user memory.
+
+        Accepts a dict with optional keys: barrio, ciudad, lat, lon.
+        Used by the AIOrchestrator's LLM agent path to persist entities
+        extracted by the agent (e.g. barrio, ciudad) into long-term memory.
+        """
+        await self._persist_search_location(memory_service, user_id, location)
+
     # ── search execution ───────────────────────────────────────────────────
 
     async def _build_search_results_response(
