@@ -17,11 +17,9 @@ from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
 from sqlalchemy import or_, select, update
 
-from src.agents.dependencies import AgentDependencies
+from src.agents.dependencies import AgentDependencies, db_access_lock
 from src.infrastructure.database.models import (
     ProviderModel,
-    ProviderTradeModel,
-    TradeModel,
     UsuarioModel,
 )
 from src.utils.geocoding import geocode_text_location
@@ -108,99 +106,76 @@ async def buscar_prestadores(
         user_id, origin_lat, origin_lon,
     )
 
-    stmt = (
-        select(ProviderModel, UsuarioModel.telefono)
-        .join(UsuarioModel, UsuarioModel.id == ProviderModel.usuario_id)
-        .where(ProviderModel.activo == True)  # noqa: E712
-    )
-
-    if params.solo_verificados:
-        stmt = stmt.where(ProviderModel.badge_activo == True)  # noqa: E712
-
-    # Apply text-based location filter using barrio/ciudad
-    use_text_location_filter = _should_apply_text_location_filter(
-        effective_params.barrio,
-        effective_params.ciudad,
-        origin_lat,
-        origin_lon,
-    )
-    logger.info(
-        "PROVIDER_FILTER user=%s use_text_location=%s barrio=%s ciudad=%s",
-        user_id,
-        use_text_location_filter,
-        effective_params.barrio,
-        effective_params.ciudad,
-    )
-
-    if use_text_location_filter:
-        location_filters = []
-        if effective_params.barrio:
-            barrio_term = f"%{effective_params.barrio}%"
-            location_filters.append(ProviderModel.barrio.ilike(barrio_term))
-            location_filters.append(ProviderModel.ciudad.ilike(barrio_term))
-        if effective_params.ciudad:
-            ciudad_term = f"%{effective_params.ciudad}%"
-            location_filters.append(ProviderModel.barrio.ilike(ciudad_term))
-            location_filters.append(ProviderModel.ciudad.ilike(ciudad_term))
-        if location_filters:
-            stmt = stmt.where(or_(*location_filters))
-
-    if effective_params.rubro:
-        rubro_terms = _build_rubro_search_terms(effective_params.rubro)
-        logger.info(
-            "PROVIDER_RUBRO user=%s rubro=%r rubro_terms=%s",
-            user_id, effective_params.rubro, rubro_terms,
+    async with db_access_lock(ctx.deps):
+        stmt = (
+            select(ProviderModel, UsuarioModel.telefono)
+            .join(UsuarioModel, UsuarioModel.id == ProviderModel.usuario_id)
+            .where(ProviderModel.activo == True)  # noqa: E712
         )
-        provider_ids_for_trade = (
-            select(ProviderTradeModel.provider_id)
-            .join(TradeModel, TradeModel.id == ProviderTradeModel.trade_id)
-            .where(
-                or_(
-                    *[
-                        clause
-                        for rubro_term in rubro_terms
-                        for clause in (
-                            TradeModel.nombre.ilike(rubro_term),
-                            TradeModel.slug.ilike(rubro_term),
-                        )
-                    ]
+
+        if params.solo_verificados:
+            stmt = stmt.where(ProviderModel.badge_activo == True)  # noqa: E712
+
+        # Apply text-based location filter using barrio/ciudad
+        use_text_location_filter = _should_apply_text_location_filter(
+            effective_params.barrio,
+            effective_params.ciudad,
+            origin_lat,
+            origin_lon,
+        )
+        logger.info(
+            "PROVIDER_FILTER user=%s use_text_location=%s barrio=%s ciudad=%s",
+            user_id,
+            use_text_location_filter,
+            effective_params.barrio,
+            effective_params.ciudad,
+        )
+
+        if use_text_location_filter:
+            location_filters = []
+            if effective_params.barrio:
+                barrio_term = f"%{effective_params.barrio}%"
+                location_filters.append(ProviderModel.barrio.ilike(barrio_term))
+                location_filters.append(ProviderModel.ciudad.ilike(barrio_term))
+            if effective_params.ciudad:
+                ciudad_term = f"%{effective_params.ciudad}%"
+                location_filters.append(ProviderModel.barrio.ilike(ciudad_term))
+                location_filters.append(ProviderModel.ciudad.ilike(ciudad_term))
+            if location_filters:
+                stmt = stmt.where(or_(*location_filters))
+
+        if effective_params.rubro:
+            logger.info(
+                "PROVIDER_RUBRO user=%s rubro=%r rubro_pattern=%r",
+                user_id,
+                effective_params.rubro,
+                _legacy_rubro_json_pattern(effective_params.rubro),
+            )
+            stmt = stmt.where(
+                ProviderModel.rubros.like(
+                    _legacy_rubro_json_pattern(effective_params.rubro)
                 )
             )
-        )
-        stmt = stmt.where(
-            or_(
-                ProviderModel.id.in_(provider_ids_for_trade),
-                *[ProviderModel.rubros.ilike(rubro_term) for rubro_term in rubro_terms],
+
+        stmt = (
+            stmt.order_by(
+                ProviderModel.badge_activo.desc(),
+                ProviderModel.plan.desc(),
             )
+            .limit(max(effective_params.limit * 3, 15))
         )
 
-    stmt = (
-        stmt.order_by(
-            ProviderModel.badge_activo.desc(),
-            ProviderModel.plan.desc(),
-        )
-        .limit(max(effective_params.limit * 3, 15))
-    )
-
-    rows = list(await ctx.deps.db.execute(stmt))
+        rows = list(await ctx.deps.db.execute(stmt))
+        provider_rows = [r[0] for r in rows]
+        telefono_map = {r[0].id: r[1] for r in rows}
     logger.info(
         "PROVIDER_RAW user=%s raw_count=%d",
         user_id, len(rows),
     )
 
-    # Extract ProviderModel instances and telefono from the joined result
-    provider_rows = [r[0] for r in rows]
-    telefono_map = {r[0].id: r[1] for r in rows}
-
-    # (A) Batch-load trade names for all matched providers in one query
-    provider_ids = [r.id for r in provider_rows]
-    trade_names_by_provider = await _batch_provider_trade_names(ctx.deps.db, provider_ids)
-
     results = []
     for r in provider_rows:
-        rubros = trade_names_by_provider.get(r.id) or (
-            json.loads(r.rubros) if r.rubros else []
-        )
+        rubros = _parse_rubros_json(r.rubros)
         results.append(
             {
                 "nombre": r.nombre,
@@ -240,34 +215,42 @@ async def crear_prestador(
     """
     from sqlalchemy import select as sa_select
 
-    usuario_id = await _resolve_usuario_id(ctx.deps.db, ctx.deps.user_id)
-    if usuario_id is None:
-        return {"error": "No se encontró el usuario para crear el perfil de prestador."}
+    async with db_access_lock(ctx.deps):
+        usuario_id = await _resolve_usuario_id(ctx.deps.db, ctx.deps.user_id)
+        if usuario_id is None:
+            return {"error": "No se encontró el usuario para crear el perfil de prestador."}
 
-    # Prevent duplicates
-    existing = await ctx.deps.db.scalar(
-        sa_select(ProviderModel).where(
-            ProviderModel.usuario_id == usuario_id
+        # Prevent duplicates
+        existing = await ctx.deps.db.scalar(
+            sa_select(ProviderModel).where(
+                ProviderModel.usuario_id == usuario_id
+            )
         )
-    )
-    if existing:
-        return {"error": "Ya existe un perfil de prestador para este usuario.", "id": existing.id}
+        if existing:
+            return {
+                "error": "Ya existe un perfil de prestador para este usuario.",
+                "id": existing.id,
+            }
 
-    provider = ProviderModel(
-        usuario_id=usuario_id,
-        nombre=params.nombre,
-        rubros=json.dumps(params.rubros, ensure_ascii=False),
-        ciudad=params.ciudad,
-        barrio=params.barrio,
-        disponibilidad=params.disponibilidad,
-        experiencia=params.experiencia,
-        facturacion=params.facturacion,
-        plan="free",
-        activo=False,  # needs manual review
-    )
-    ctx.deps.db.add(provider)
-    await ctx.deps.db.flush()
-    return {"id": provider.id, "nombre": provider.nombre, "estado": "pendiente_revision"}
+        provider = ProviderModel(
+            usuario_id=usuario_id,
+            nombre=params.nombre,
+            rubros=json.dumps(params.rubros, ensure_ascii=False),
+            ciudad=params.ciudad,
+            barrio=params.barrio,
+            disponibilidad=params.disponibilidad,
+            experiencia=params.experiencia,
+            facturacion=params.facturacion,
+            plan="free",
+            activo=False,  # needs manual review
+        )
+        ctx.deps.db.add(provider)
+        await ctx.deps.db.flush()
+        return {
+            "id": provider.id,
+            "nombre": provider.nombre,
+            "estado": "pendiente_revision",
+        }
 
 
 async def actualizar_prestador(
@@ -275,10 +258,6 @@ async def actualizar_prestador(
     params: ActualizarPrestadorInput,
 ) -> dict[str, Any]:
     """Update a single field of the current user's provider profile."""
-    usuario_id = await _resolve_usuario_id(ctx.deps.db, ctx.deps.user_id)
-    if usuario_id is None:
-        return {"error": "No se encontró perfil de prestador para este usuario."}
-
     allowed_fields = {"disponibilidad", "experiencia", "barrio", "ciudad", "rubros"}
     if params.field not in allowed_fields:
         return {"error": f"Campo no permitido: {params.field}"}
@@ -290,16 +269,21 @@ async def actualizar_prestador(
         except json.JSONDecodeError:
             return {"error": "El campo rubros debe ser un JSON array de strings."}
 
-    result = await ctx.deps.db.execute(
-        update(ProviderModel)
-        .where(ProviderModel.usuario_id == usuario_id)
-        .values(**{params.field: value})
-        .returning(ProviderModel.id)
-    )
-    updated_id = result.scalar_one_or_none()
-    if updated_id is None:
-        return {"error": "No se encontró perfil de prestador para este usuario."}
-    return {"updated": True, "field": params.field}
+    async with db_access_lock(ctx.deps):
+        usuario_id = await _resolve_usuario_id(ctx.deps.db, ctx.deps.user_id)
+        if usuario_id is None:
+            return {"error": "No se encontró perfil de prestador para este usuario."}
+
+        result = await ctx.deps.db.execute(
+            update(ProviderModel)
+            .where(ProviderModel.usuario_id == usuario_id)
+            .values(**{params.field: value})
+            .returning(ProviderModel.id)
+        )
+        updated_id = result.scalar_one_or_none()
+        if updated_id is None:
+            return {"error": "No se encontró perfil de prestador para este usuario."}
+        return {"updated": True, "field": params.field}
 
 
 async def consultar_prestador(
@@ -307,16 +291,17 @@ async def consultar_prestador(
     _params: ConsultarPrestadorInput,
 ) -> dict[str, Any]:
     """Return the current user's provider profile, if any."""
-    usuario_id = await _resolve_usuario_id(ctx.deps.db, ctx.deps.user_id)
-    if usuario_id is None:
-        return {"error": "No tenés un perfil de prestador registrado aún."}
+    async with db_access_lock(ctx.deps):
+        usuario_id = await _resolve_usuario_id(ctx.deps.db, ctx.deps.user_id)
+        if usuario_id is None:
+            return {"error": "No tenés un perfil de prestador registrado aún."}
 
-    row = await ctx.deps.db.scalar(
-        select(ProviderModel).where(ProviderModel.usuario_id == usuario_id)
-    )
-    if row is None:
-        return {"error": "No tenés un perfil de prestador registrado aún."}
-    rubros = await _provider_trade_names(ctx.deps.db, row.id, row.rubros)
+        row = await ctx.deps.db.scalar(
+            select(ProviderModel).where(ProviderModel.usuario_id == usuario_id)
+        )
+        if row is None:
+            return {"error": "No tenés un perfil de prestador registrado aún."}
+        rubros = _parse_rubros_json(row.rubros)
     return {
         "id": row.id,
         "nombre": row.nombre,
@@ -332,30 +317,6 @@ async def consultar_prestador(
         "experiencia": row.experiencia,
         "facturacion": row.facturacion,
     }
-
-
-async def _batch_provider_trade_names(
-    db: Any,
-    provider_ids: list[int],
-) -> dict[int, list[str]]:
-    """Load trade names for multiple providers in a single query.
-
-    Returns a dict mapping provider_id -> [trade_name, ...].
-    Providers without trade links get an empty list.
-    """
-    if not provider_ids:
-        return {}
-
-    rows = await db.execute(
-        select(ProviderTradeModel.provider_id, TradeModel.nombre)
-        .join(TradeModel, TradeModel.id == ProviderTradeModel.trade_id)
-        .where(ProviderTradeModel.provider_id.in_(provider_ids))
-        .order_by(TradeModel.nombre.asc())
-    )
-    result: dict[int, list[str]] = {pid: [] for pid in provider_ids}
-    for pid, name in rows:
-        result.setdefault(pid, []).append(name)
-    return result
 
 
 async def _resolve_usuario_id(db: Any, raw_user_id: str) -> int | None:
@@ -375,22 +336,17 @@ async def _resolve_usuario_id(db: Any, raw_user_id: str) -> int | None:
     return None
 
 
-async def _provider_trade_names(db: Any, provider_id: int, rubros_json: str) -> list[str]:
-    """Return normalized trade names, falling back to the legacy rubros cache.
-
-    Used for single-provider lookups (e.g. consultar_prestador).
-    For batch lookups use _batch_provider_trade_names.
-    """
-    rows = await db.execute(
-        select(TradeModel.nombre)
-        .join(ProviderTradeModel, ProviderTradeModel.trade_id == TradeModel.id)
-        .where(ProviderTradeModel.provider_id == provider_id)
-        .order_by(TradeModel.nombre.asc())
-    )
-    trade_names = list(rows.scalars())
-    if trade_names:
-        return trade_names
-    return json.loads(rubros_json) if rubros_json else []
+def _parse_rubros_json(rubros_json: str | None) -> list[str]:
+    """Parse the provider rubros JSON array, tolerating invalid legacy values."""
+    if not rubros_json:
+        return []
+    try:
+        raw = json.loads(rubros_json)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw if isinstance(item, str) and item]
 
 
 async def _resolve_search_origin(
@@ -516,13 +472,9 @@ def _should_apply_text_location_filter(
     return bool(barrio or ciudad) and origin_lat is None and origin_lon is None
 
 
-def _build_rubro_search_terms(rubro: str) -> list[str]:
-    """Build LIKE patterns that cover common oficio vs. rubro label variants.
-
-    Uses synonym expansion so that e.g. "electricista" generates terms that
-    also match "Electricidad" in the database.
-    """
-    return _expand_rubro_synonyms(rubro)
+def _legacy_rubro_json_pattern(rubro: str) -> str:
+    """Build a legacy JSON-array pattern for an exact rubro element match."""
+    return f"%{json.dumps(rubro, ensure_ascii=False)}%"
 
 
 def _normalize_rubro_text(text: str) -> str:
@@ -530,150 +482,6 @@ def _normalize_rubro_text(text: str) -> str:
     normalized = unicodedata.normalize("NFKD", text)
     without_marks = "".join(char for char in normalized if not unicodedata.combining(char))
     return re.sub(r"\s+", " ", without_marks.strip().lower())
-
-
-# ── Trade/Ofício synonym map ─────────────────────────────────────────────────
-# Maps common user queries to DB-compatible search stems so that, e.g.,
-# "electricista" matches providers who registered with rubro "Electricidad".
-_TRADE_SYNONYM_STEMS: dict[str, tuple[str, ...]] = {
-    # electricidad / electricista
-    "electric": ("electricid", "electricist", "electric"),
-    # gas / gasista
-    "gas": ("gasist", "gas"),
-    # plomero / plomeria / plomera
-    "plomer": ("plomer",),
-    # cerrajero / cerrajeria
-    "cerraj": ("cerrajer", "cerraj"),
-    # albañil / albañileria
-    "albañil": ("albañil",),
-    "albanni": ("albannil",),
-    # pintor / pintura
-    "pintor": ("pint"),
-    "pintur": ("pint"),
-    # herrero / herreria
-    "herr": ("herr",),
-    # carpintero / carpinteria
-    "carpinter": ("carpinter",),
-    # jardinero / jardineria
-    "jardin": ("jardin",),
-    # fontanero / fontaneria
-    "fontan": ("fontan",),
-    # cocinero / cocina
-    "cocin": ("cocin",),
-    # profesor / profesorado
-    "profesor": ("profesor",),
-    # abogado / abogacia
-    "abog": ("abog",),
-    # contador / contaduria
-    "contador": ("contador",),
-    # medico / medicina
-    "medic": ("medic",),
-    # enfermero / enfermeria
-    "enfermer": ("enfermer",),
-    # veterinario / veterinaria
-    "veterinari": ("veterinari",),
-    # ingeniero / ingenieria
-    "ingenier": ("ingenier",),
-    # arquitecto / arquitectura
-    "arquitect": ("arquitect",),
-    # tecnico / tecnica
-    "tecnic": ("tecnic",),
-    # reparador / reparacion
-    "repar": ("repar",),
-    # limpieza / limpiador
-    "limpi": ("limpi",),
-    # cuidado / cuidador
-    "cuidad": ("cuidad",),
-    # mascota / paseador
-    "mascot": ("mascot",),
-    # seguridad / vigilador
-    "segur": ("segur",),
-    # profesor / maestro
-    "profes": ("profes",),
-    # traductor / traduccion
-    "traductor": ("traductor",),
-    "traduccion": ("traduccion",),
-    # chofer / transporte
-    "chofer": ("chofer",),
-    "conduct": ("conduct",),
-    "transport": ("transport",),
-    # flete / mudanza
-    "flet": ("flet",),
-    "mudanz": ("mudanz",),
-    "mudanza": ("mudanza",),
-    # niñero / niñera / niñera
-    "niñer": ("niñer",),
-    "ninier": ("ninier",),
-}
-
-
-def _profession_stem(word: str) -> str | None:
-    """Return a broad stem for oficio nouns.
-
-    Handles common Spanish profession suffixes and also returns a SYNONYM
-    expansion so that, e.g., "electricista" also generates "electricid" which
-    matches the DB rubro "Electricidad".
-    """
-    if len(word) < 4:
-        return None
-
-    # Try to find a known synonym stem by matching the first N characters
-    for stem, expansions in _TRADE_SYNONYM_STEMS.items():
-        if word.startswith(stem):
-            return expansions[0]
-        # Also check if any expansion starts with the word
-        for exp in expansions:
-            if exp.startswith(word) or word.startswith(exp):
-                return exp
-
-    # Suffix-based fallback
-    if word.endswith(("ero", "era", "eria")):
-        # plomero -> plomer, plomeria -> plomer
-        return word[:-1] if not word.endswith("eria") else word[:-2]
-    if word.endswith(("ista", "ista")):
-        # electricista -> electricist (also handles gasista, etc.)
-        return word[:-4] if len(word) > 5 else None
-    if word.endswith(("dor", "dora", "tor", "tora")):
-        # reparador -> reparador
-        # removedor -> removedor
-        return word[:-2] if len(word) > 5 else None
-    if word.endswith(("nte", "nte")):
-        # estudiante, auxiliante -> estudiant, auxiliant
-        return word[:-2] if len(word) > 5 else None
-
-    return None
-
-
-def _expand_rubro_synonyms(rubro: str) -> list[str]:
-    """Generate all known synonym variants for a given rubro search term.
-
-    E.g. "electricista" -> ["%electricista%", "%electricist%", "%electricidad%", "%electric%"]
-    """
-    normalized = _normalize_rubro_text(rubro)
-    expanded: set[str] = set()
-
-    # 1. The original normalized text
-    if normalized:
-        expanded.add(normalized)
-
-    # 2. Each individual token
-    for token in normalized.split():
-        expanded.add(token)
-        stem = _profession_stem(token)
-        if stem and stem != token:
-            expanded.add(stem)
-
-        # 3. Synonym expansions from the trade map
-        for key, expansions in _TRADE_SYNONYM_STEMS.items():
-            if token.startswith(key) or (stem and stem.startswith(key)):
-                for exp in expansions:
-                    expanded.add(exp)
-            # Reverse: also check if the key starts with the token
-            if key.startswith(token):
-                for exp in expansions:
-                    expanded.add(exp)
-
-    return [f"%{t}%" for t in expanded if t]
 
 
 def _distance_km(

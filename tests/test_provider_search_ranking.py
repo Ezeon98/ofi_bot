@@ -23,14 +23,11 @@ providers = _load_providers_module()
 class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
     """Validate ranking behavior when origin coordinates are available."""
 
-    def test_rubro_search_terms_do_not_expand_to_single_letters(self) -> None:
-        """Profession synonyms should not degrade into one-character wildcards."""
-        terms = providers._build_rubro_search_terms("plomero")
+    def test_legacy_rubro_json_pattern_matches_exact_array_item(self) -> None:
+        """Legacy JSON rubros should be matched by exact element, not fuzzy stems."""
+        pattern = providers._legacy_rubro_json_pattern("Niñera")
 
-        self.assertIn("%plomero%", terms)
-        self.assertIn("%plomer%", terms)
-        self.assertNotIn("%p%", terms)
-        self.assertNotIn("%o%", terms)
+        self.assertEqual(pattern, '%"Niñera"%')
 
     def test_search_params_clamp_limit_to_three(self) -> None:
         """Searches should never return more than three provider cards."""
@@ -58,25 +55,14 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
         self.assertEqual(sanitized.barrio, "Caballito")
         self.assertIsNone(sanitized.ciudad)
 
-    async def test_rubro_search_expands_profession_terms_for_legacy_labels(self) -> None:
-        """Searching 'plomero' should still match a provider stored as 'Plomeria'."""
-        palermo_provider = SimpleNamespace(
-            id=1,
-            nombre="Juan Plomero",
-            rubros='["Plomeria"]',
-            ciudad="CABA",
-            barrio="Palermo",
-            lat=-34.5875,
-            lon=-58.4201,
-            disponibilidad="Lunes a sabado",
-            badge_activo=True,
-            facturacion="monotributo",
-        )
+    async def test_rubro_search_uses_exact_trade_filters_only(self) -> None:
+        """Searching should filter only against the provider rubros JSON field."""
+        captured_sql: dict[str, str] = {}
 
         async def execute_side_effect(stmt):
-            sql = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
-            if "%plomer%" in sql and "%plomero%" in sql:
-                return [(palermo_provider, "5491100001001")]
+            captured_sql["sql"] = str(
+                stmt.compile(compile_kwargs={"literal_binds": True})
+            )
             return []
 
         fake_db = SimpleNamespace(execute=AsyncMock(side_effect=execute_side_effect))
@@ -87,18 +73,16 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             )
         )
 
-        with patch.object(
-            providers,
-            "_batch_provider_trade_names",
-            new=AsyncMock(return_value={1: ["Plomeria"]}),
-        ):
-            results = await providers.buscar_prestadores(
-                ctx,
-                providers.BuscarPrestadoresInput(rubro="plomero", barrio="Palermo", limit=3),
-            )
+        await providers.buscar_prestadores(
+            ctx,
+            providers.BuscarPrestadoresInput(rubro="Niñera", barrio="Palermo", limit=3),
+        )
 
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["nombre"], "Juan Plomero")
+        sql = captured_sql["sql"]
+        self.assertIn("providers.rubros LIKE '%\"Niñera\"%'", sql)
+        self.assertNotIn("trades", sql.lower())
+        self.assertNotIn("%n%", sql)
+        self.assertNotIn("%ninera%", sql)
 
     async def test_busqueda_uses_message_metadata_for_distance_ranking(self) -> None:
         """Metadata coordinates should be enough to compute and expose result distances."""
@@ -155,21 +139,10 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             )
         )
 
-        with patch.object(
-            providers,
-            "_batch_provider_trade_names",
-            new=AsyncMock(
-                return_value={
-                    1: ["Plomeria"],
-                    2: ["Plomeria"],
-                    3: ["Plomeria"],
-                }
-            ),
-        ):
-            results = await providers.buscar_prestadores(
-                ctx,
-                providers.BuscarPrestadoresInput(rubro="plomero", limit=3),
-            )
+        results = await providers.buscar_prestadores(
+            ctx,
+            providers.BuscarPrestadoresInput(rubro="plomero", limit=3),
+        )
 
         self.assertEqual(results[0]["nombre"], "Proveedor Cercano")
         self.assertEqual(results[1]["nombre"], "Proveedor Verificado")
@@ -218,23 +191,11 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             )
         )
 
-        with (
-            patch.object(
-                providers,
-                "_batch_provider_trade_names",
-                new=AsyncMock(
-                    return_value={
-                        1: ["Plomeria"],
-                        2: ["Plomeria"],
-                    }
-                ),
-            ),
-            patch.object(
+        with patch.object(
                 providers,
                 "geocode_text_location",
                 new=AsyncMock(return_value={"lat": -34.7060, "lon": -58.3190}),
-            ) as geocode_mock,
-        ):
+            ) as geocode_mock:
             results = await providers.buscar_prestadores(
                 ctx,
                 providers.BuscarPrestadoresInput(rubro="plomero", barrio="Wilde", limit=3),

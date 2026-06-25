@@ -364,7 +364,7 @@ class AIOrchestratorProviderFormattingTests(IsolatedAsyncioTestCase):
                         content=[
                             {
                                 "nombre": "Maria Electricista",
-                                "rubros": ["Electricidad"],
+                                "rubros": ["Electricista domiciliario", "Gasista"],
                                 "badge_verificado": True,
                                 "barrio": "Caballito",
                                 "ciudad": "CABA",
@@ -436,6 +436,7 @@ class AIOrchestratorProviderFormattingTests(IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(response.messages), 2)
         self.assertIn("Maria Electricista", response.messages[0]["text"])
+        self.assertIn("Electricista domiciliario, Gasista", response.messages[0]["text"])
         self.assertIn("Sofia Tecnica", response.messages[1]["text"])
         self.assertEqual(response.messages[0]["action"]["label"], "Contactar")
         self.assertEqual(response.metadata["providers"][0]["nombre"], "Maria Electricista")

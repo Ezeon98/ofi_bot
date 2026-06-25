@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from src.agents.dependencies import AgentDependencies
 from src.agents.models.response import AgentResponse, Intent
-from src.infrastructure.database.models import ProviderModel, TradeModel, UsuarioModel
+from src.infrastructure.database.models import ProviderModel, UsuarioModel
 from src.infrastructure.database.repositories.estado import EstadoRepository
 from src.memory.service import MemoryService
 from src.tools.business.providers import CrearPrestadorInput, crear_prestador
@@ -145,7 +145,7 @@ class ProviderRegistrationService:
             return self._build_trades_request_response()
 
         if paso == "awaiting_trades":
-            rubros = await self._classify_trades(deps.db, message)
+            rubros = self._classify_trades(message)
             if not rubros:
                 return self._build_trades_request_response(retry=True)
             await self._save_state(
@@ -244,36 +244,12 @@ class ProviderRegistrationService:
             },
         )
 
-    async def _classify_trades(self, db: Any, message: str) -> list[str]:
-        """Map a free-text service description to known rubros when possible."""
-        normalized = self._normalize_text(self._strip_prefixes(message, TRADE_PREFIXES))
-        if not normalized:
+    def _classify_trades(self, message: str) -> list[str]:
+        """Extract provider rubros directly from the user's free-text reply."""
+        raw_message = self._strip_prefixes(message, TRADE_PREFIXES)
+        if not raw_message.strip():
             return []
-
-        rows = await db.execute(
-            select(TradeModel.nombre, TradeModel.slug).order_by(TradeModel.nombre.asc())
-        )
-        matches: list[tuple[int, str]] = []
-        for nombre, slug in rows:
-            positions = [
-                normalized.find(alias)
-                for alias in self._trade_aliases(str(nombre), str(slug))
-                if alias and normalized.find(alias) >= 0
-            ]
-            if positions:
-                matches.append((min(positions), str(nombre)))
-
-        if matches:
-            ordered = sorted(matches, key=lambda item: (item[0], item[1]))
-            unique: list[str] = []
-            for _, nombre in ordered:
-                if nombre not in unique:
-                    unique.append(nombre)
-                if len(unique) == 5:
-                    break
-            return unique
-
-        return self._fallback_trade_labels(normalized)
+        return self._fallback_trade_labels(raw_message)
 
     async def _resolve_location(
         self,
@@ -397,31 +373,12 @@ class ProviderRegistrationService:
         return cleaned.title()
 
     @staticmethod
-    def _trade_aliases(nombre: str, slug: str) -> set[str]:
-        """Build basic alias variants for a catalog trade entry."""
-        aliases = {
-            ProviderRegistrationService._normalize_text(nombre),
-            ProviderRegistrationService._normalize_text(slug.replace("-", " ")),
-        }
-
-        base = ProviderRegistrationService._normalize_text(nombre)
-        if base.endswith("s"):
-            aliases.add(base[:-1])
-        else:
-            aliases.add(f"{base}s")
-
-        if base.startswith("tecnico en "):
-            aliases.add(base.replace("tecnico en ", "", 1))
-        return {alias.strip() for alias in aliases if alias.strip()}
-
-    @staticmethod
-    def _fallback_trade_labels(normalized_message: str) -> list[str]:
-        """Fallback to user-provided service snippets when catalog matching fails."""
-        parts = re.split(r",|/|\by\b|\be\b", normalized_message)
+    def _fallback_trade_labels(raw_message: str) -> list[str]:
+        """Split a free-text services reply into up to five provider rubro labels."""
+        parts = re.split(r",|/|\by\b|\be\b", raw_message, flags=re.IGNORECASE)
         labels: list[str] = []
         for part in parts:
-            candidate = re.sub(r"[^a-z0-9ñ ]+", " ", part)
-            candidate = re.sub(r"\s+", " ", candidate).strip()
+            candidate = ProviderRegistrationService._normalize_text(part)
             if len(candidate) < 3:
                 continue
             label = candidate.title()

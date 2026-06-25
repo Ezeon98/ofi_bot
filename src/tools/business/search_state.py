@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
 
-from src.agents.dependencies import AgentDependencies
+from src.agents.dependencies import AgentDependencies, db_access_lock
 from src.infrastructure.database.repositories.estado import EstadoRepository
 
 SEARCH_STATE_NAME = "guided_provider_search"
@@ -39,7 +39,8 @@ async def consultar_estado_busqueda(
     _params: ConsultarEstadoBusquedaInput,
 ) -> dict[str, str | bool | None]:
     """Return the current guided-search state for the user, if any."""
-    state = await EstadoRepository(ctx.deps.db).get(ctx.deps.user_id)
+    async with db_access_lock(ctx.deps):
+        state = await EstadoRepository(ctx.deps.db).get(ctx.deps.user_id)
     if state.get("estado") != SEARCH_STATE_NAME:
         return {"activo": False, "paso": None, "rubro": None, "barrio": None, "ciudad": None, "detalle": None}
 
@@ -66,7 +67,8 @@ async def guardar_estado_busqueda(
         "ciudad": params.ciudad,
         "detalle": params.detalle,
     }
-    await EstadoRepository(ctx.deps.db).save(ctx.deps.user_id, payload)
+    async with db_access_lock(ctx.deps):
+        await EstadoRepository(ctx.deps.db).save(ctx.deps.user_id, payload)
     return {"guardado": True, **payload}
 
 
@@ -75,5 +77,6 @@ async def limpiar_estado_busqueda(
     _params: LimpiarEstadoBusquedaInput,
 ) -> dict[str, bool]:
     """Delete the guided-search state for the current user."""
-    await EstadoRepository(ctx.deps.db).delete(ctx.deps.user_id)
+    async with db_access_lock(ctx.deps):
+        await EstadoRepository(ctx.deps.db).delete(ctx.deps.user_id)
     return {"limpiado": True}

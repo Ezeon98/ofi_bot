@@ -172,40 +172,6 @@ class ProviderModel(Base):
     )
 
 
-class TradeModel(Base):
-    """Normalized catalog of provider trades/officios."""
-
-    __tablename__ = "trades"
-    __table_args__ = (
-        UniqueConstraint("slug", name="uq_trades_slug"),
-        UniqueConstraint("nombre", name="uq_trades_nombre"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    slug: Mapped[str] = mapped_column(String(80), nullable=False)
-    nombre: Mapped[str] = mapped_column(String(120), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
-    )
-
-
-class ProviderTradeModel(Base):
-    """Many-to-many link between providers and trades."""
-
-    __tablename__ = "provider_trades"
-    __table_args__ = (Index("ix_provider_trades_trade_provider", "trade_id", "provider_id"),)
-
-    provider_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("providers.id", ondelete="CASCADE"), primary_key=True
-    )
-    trade_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("trades.id", ondelete="CASCADE"), primary_key=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
-    )
-
-
 class ProviderRatingModel(Base):
     """User ratings for service providers.
 

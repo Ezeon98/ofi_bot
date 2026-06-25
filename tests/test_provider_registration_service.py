@@ -96,8 +96,8 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
             },
         )
 
-    async def test_trade_description_is_classified_against_catalog(self) -> None:
-        """The rubro step should map free text to multiple catalog trades."""
+    async def test_trade_description_is_split_into_provider_rubros(self) -> None:
+        """The rubro step should persist the services exactly as the provider describes them."""
         service = ProviderRegistrationService(memory_config=SimpleNamespace(enabled=True))
         state_repo = SimpleNamespace(
             get=AsyncMock(
@@ -111,16 +111,7 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
             save=AsyncMock(),
             delete=AsyncMock(),
         )
-        fake_rows = [
-            ("Electricidad", "electricidad"),
-            ("Plomeria", "plomeria"),
-            (
-                "Tecnico en aire acondicionado",
-                "aire-acondicionado",
-            ),
-        ]
         db = SimpleNamespace(
-            execute=AsyncMock(return_value=fake_rows),
             scalar=AsyncMock(return_value=None),
         )
 
@@ -151,7 +142,7 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
                 "rubros": [
                     "Plomeria",
                     "Electricidad",
-                    "Tecnico en aire acondicionado",
+                    "Aire Acondicionado",
                 ],
             },
         )

@@ -24,11 +24,25 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
+class _ConditionalFormatter(logging.Formatter):
+    """Show module name only on ERROR and CRITICAL; hide it on INFO/WARNING/DEBUG."""
+    _BASE_FMT = "%(asctime)s  | %(message)s"
+    _ERROR_FMT = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+
+    def format(self, record: logging.LogRecord) -> str:
+        if record.levelno >= logging.ERROR:
+            self._style._fmt = self._ERROR_FMT
+        else:
+            self._style._fmt = self._BASE_FMT
+        return super().format(record)
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+    format="%(asctime)s | %(levelname)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+_ROOT_HANDLER = logging.getLogger().handlers[0]
+_ROOT_HANDLER.setFormatter(_ConditionalFormatter())
 for _noisy in ("sqlalchemy", "httpx", "httpcore", "asyncpg", "watchfiles"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 

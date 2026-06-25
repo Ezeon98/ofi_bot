@@ -23,6 +23,7 @@ Responsibilities (in order):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -120,7 +121,8 @@ class AIOrchestrator:
             metadata_keys=list(metadata.keys()) if metadata else None,
         )
 
-        memory_service = self._build_memory_service(db)
+        db_lock = asyncio.Lock()
+        memory_service = self._build_memory_service(db, db_lock)
 
         # Resolve the integer DB id once for the whole pipeline.
         usuario_id = await self._resolve_usuario_id(db, user_id)
@@ -169,6 +171,7 @@ class AIOrchestrator:
         # ── 4. Dependencies ───────────────────────────────────────────────
         deps = AgentDependencies(
             db=db,
+            db_lock=db_lock,
             user_id=user_id,
             usuario_id=usuario_id,
             memory_service=memory_service,
@@ -292,6 +295,21 @@ class AIOrchestrator:
         # The shortcut path persists these via _persist_search_location, but the
         # LLM agent path must also persist them so they're available for future
         # searches. The MemoryExtractor is explicitly told to skip search_* keys.
+        if agent_response.intent == Intent.ACTUALIZAR_UBICACION and agent_response.entities:
+            # User is updating their location — persist it without searching
+            location_entities = agent_response.entities
+            location = {}
+            barrio = location_entities.get("barrio")
+            ciudad = location_entities.get("ciudad")
+            if isinstance(barrio, str) and barrio:
+                location["barrio"] = barrio
+            if isinstance(ciudad, str) and ciudad:
+                location["ciudad"] = ciudad
+            if location:
+                await self._provider_search.persist_search_location(
+                    memory_service, usuario_id, location,
+                )
+
         if agent_response.intent == Intent.BUSCAR_SERVICIO and agent_response.entities:
             search_entities = agent_response.entities
             location = {}
@@ -305,7 +323,7 @@ class AIOrchestrator:
                 await self._provider_search.persist_search_location(
                     memory_service, usuario_id, location,
                 )
-            # Also persist rubro as a general user fact so it's memorable
+            # Persist rubro so future conversations know what the user last searched
             rubro = search_entities.get("rubro")
             if isinstance(rubro, str) and rubro:
                 await memory_service.upsert_memory(
@@ -376,13 +394,18 @@ class AIOrchestrator:
             metadata=agent_response.metadata,
         )
 
-    def _build_memory_service(self, db: AsyncSession) -> MemoryService:
+    def _build_memory_service(
+        self,
+        db: AsyncSession,
+        db_lock: asyncio.Lock | None = None,
+    ) -> MemoryService:
         """Create the request-scoped memory service facade."""
         return MemoryService(
             session=db,
             extractor=MemoryExtractor(self._openai, model="gpt-4o-mini"),
             summarizer=MemorySummarizer(self._openai, model="gpt-4o-mini"),
             config=self._memory_config,
+            db_lock=db_lock,
         )
 
     @staticmethod

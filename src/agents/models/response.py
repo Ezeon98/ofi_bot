@@ -15,6 +15,7 @@ class Intent(StrEnum):
     BUSCAR_SERVICIO = "buscar_servicio"
     REGISTRAR_PRESTADOR = "registrar_prestador"
     ACTUALIZAR_PERFIL = "actualizar_perfil"
+    ACTUALIZAR_UBICACION = "actualizar_ubicacion"
     CONSULTAR_ESTADO = "consultar_estado"
     CONTRATAR_SERVICIO = "contratar_servicio"
     UPGRADE_PLAN = "upgrade_plan"

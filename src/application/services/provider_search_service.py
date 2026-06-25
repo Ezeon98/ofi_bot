@@ -80,7 +80,7 @@ CANONICAL_RUBROS: list[str] = [
     "Esculpidas acrílicas", "Lashista", "Lifting de pestañas",
     "Perfilado de cejas", "Microblading", "Maquilladora", "Peinadora",
     "Peluquera", "Barbero", "Cosmetóloga", "Esteticista", "Depilación",
-    "Masajes estéticos",
+    "Masajes estéticos", "Niñera", "Cuidado de adultos mayores", "Cuidado de personas con discapacidad",
 ]
 
 _RUBROS_FOR_PROMPT = ", ".join(CANONICAL_RUBROS)
