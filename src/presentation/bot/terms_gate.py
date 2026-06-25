@@ -69,11 +69,11 @@ async def send_post_terms_service_choice(sender: str) -> None:
         [
             {
                 "id": POST_TERMS_OFFER_SERVICES_BUTTON_ID,
-                "title": "Quiero ofrecer mis servicios",
+                "title": "Ofrecer servicios",
             },
             {
                 "id": POST_TERMS_SEEK_SERVICES_BUTTON_ID,
-                "title": "Busco un Servicio",
+                "title": "Buscar servicios",
             },
         ],
     )

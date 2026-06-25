@@ -34,7 +34,7 @@ async def guardar_memoria(
 ) -> dict[str, str]:
     """Persist a fact about the user so it can be recalled in future conversations."""
     await ctx.deps.memory_service.upsert_memory(
-        ctx.deps.user_id, params.key, params.value, params.importance
+        ctx.deps.usuario_id, params.key, params.value, params.importance
     )
     return {"status": "guardado", "key": params.key}
 
@@ -44,7 +44,7 @@ async def buscar_memoria(
     params: BuscarMemoriaInput,
 ) -> dict[str, str | None]:
     """Look up a specific memory key for the current user."""
-    memories = await ctx.deps.memory_service.get_memories(ctx.deps.user_id)
+    memories = await ctx.deps.memory_service.get_memories(ctx.deps.usuario_id)
     match = next((m for m in memories if m.key == params.key), None)
     return {"key": params.key, "value": match.value if match else None}
 
@@ -55,6 +55,6 @@ async def actualizar_memoria(
 ) -> dict[str, str]:
     """Update an existing memory value (upserts if missing)."""
     await ctx.deps.memory_service.upsert_memory(
-        ctx.deps.user_id, params.key, params.value, params.importance
+        ctx.deps.usuario_id, params.key, params.value, params.importance
     )
     return {"status": "actualizado", "key": params.key}

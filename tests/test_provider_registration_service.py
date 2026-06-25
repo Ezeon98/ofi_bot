@@ -208,7 +208,7 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
                 user_id="5491162527111",
                 message="Caballito",
                 metadata={"message_type": "text"},
-                deps=SimpleNamespace(db=object(), user_id="5491162527111"),
+                deps=SimpleNamespace(db=object(), user_id="5491162527111", usuario_id=71),
                 memory_service=memory_service,
                 turn_id="turn-3",
             )
@@ -220,7 +220,7 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.entities["barrio"], "Caballito")
         state_repo.delete.assert_awaited_once_with("5491162527111")
         memory_service.upsert_memory.assert_awaited_once_with(
-            "5491162527111",
+            71,
             "provider_registration_age",
             "34",
             0.8,

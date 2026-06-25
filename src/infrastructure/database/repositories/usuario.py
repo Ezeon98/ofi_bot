@@ -25,6 +25,13 @@ class UsuarioRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_id_by_telefono(self, telefono: str) -> int | None:
+        """Return the integer PK for a phone number, or None if not found."""
+        result = await self._s.execute(
+            select(UsuarioModel.id).where(UsuarioModel.telefono == telefono)
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_bsuid(self, bsuid: str):
         """Look up a user by their Business-Scoped User ID."""
         result = await self._s.execute(

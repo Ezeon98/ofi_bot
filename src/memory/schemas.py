@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 class MemoryRead(BaseModel):
     id: int
-    user_id: str
+    user_id: int
     key: str
     value: str
     importance: float
@@ -40,7 +40,7 @@ class ConversationTurnRead(BaseModel):
 
 class ConversationRead(BaseModel):
     id: int
-    user_id: str
+    user_id: int
     started_at: datetime
     last_message_at: datetime
     summary: str | None = None

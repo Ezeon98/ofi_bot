@@ -12,10 +12,13 @@ The AIOrchestrator now delegates provider-related logic to this service.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from types import SimpleNamespace
 from typing import Any
+
+from openai import AsyncOpenAI
 
 from src.agents.dependencies import AgentDependencies
 from src.agents.models.response import AgentResponse, Intent, Message, MessageAction
@@ -26,6 +29,70 @@ from src.memory.schemas import MemoryRead
 from src.tools.business.providers import BuscarPrestadoresInput, buscar_prestadores
 from src.tools.business.search_state import SEARCH_STATE_NAME
 from src.utils.geocoding import geocode_text_location
+
+# Canonical trade list — extracted from the official rubros catalogue.
+# The AI uses this list to normalise the user's rubro to a known trade name.
+CANONICAL_RUBROS: list[str] = [
+    "Albañil", "Maestro Mayor de Obras", "Techista", "Colocador de Durlock",
+    "Colocador de Cerámicos", "Yesero", "Pintor", "Impermeabilización",
+    "Hormigón y Contrapisos", "Constructor de Piscinas",
+    "Electricista domiciliario", "Electricista industrial",
+    "Instalación de luminarias", "Automatización y domótica",
+    "Instalación de cámaras", "Instalación de alarmas", "Porteros eléctricos",
+    "Plomero", "Gasista matriculado", "Destapaciones",
+    "Instalación de calefones", "Instalación de termotanques",
+    "Instalación de bombas de agua", "Reparación de pérdidas",
+    "Técnico en aire acondicionado", "Refrigeración comercial", "Calefacción",
+    "Instalación de estufas", "Mantenimiento HVAC",
+    "Carpintero", "Carpintero de obra", "Fabricación de muebles",
+    "Restauración de muebles", "Armado de muebles",
+    "Herrero", "Soldador", "Rejas y portones", "Estructuras metálicas",
+    "Automatización de portones",
+    "Mantenimiento integral", "Reparaciones generales",
+    "Colocación de cortinas", "Colocación de cuadros y estantes", "Cerrajería",
+    "Cerrajero", "Instalador de alarmas", "Instalador de cámaras",
+    "Control de acceso", "Cercos eléctricos",
+    "Jardinero", "Poda de árboles", "Paisajismo", "Sistemas de riego",
+    "Limpieza de terrenos", "Parquización",
+    "Limpieza domiciliaria", "Limpieza de oficinas", "Limpieza de finales de obra",
+    "Limpieza de vidrios", "Limpieza de tapizados", "Desinfección",
+    "Mudanzas", "Fletes", "Mini fletes", "Transporte de materiales",
+    "Transporte de muebles",
+    "Mecánico", "Electricidad automotor", "Gomería", "Chapista",
+    "Pintura automotor", "Auxilio mecánico",
+    "Técnico de PC", "Redes e Internet", "Reparación de celulares",
+    "Instalación de software", "Soporte IT", "Instalación de impresoras",
+    "Antenista", "Instalación de TV satelital", "Fibra óptica", "Redes WiFi",
+    "Diseñador gráfico", "Fotógrafo", "Videógrafo", "Community Manager",
+    "Diseñador web",
+    "Contador", "Abogado", "Escribano", "Arquitecto", "Ingeniero", "Agrimensor",
+    "Enfermero domiciliario", "Kinesiólogo", "Masajista", "Personal trainer",
+    "Nutricionista",
+    "Paseador de perros", "Peluquería canina", "Adiestrador",
+    "Cuidador de mascotas", "Veterinario a domicilio",
+    "DJ", "Sonido e iluminación", "Catering", "Mozo",
+    "Decoración de eventos", "Fotografía de eventos",
+    "Tornero", "Mecánico industrial", "Electromecánico",
+    "Mantenimiento industrial", "Instrumentación industrial",
+    "Alambrador", "Tractorista", "Mantenimiento rural", "Perforaciones",
+    "Sistemas de riego agrícola",
+    "Manicura", "Pedicura", "Nail Art", "Esculpidas en gel",
+    "Esculpidas acrílicas", "Lashista", "Lifting de pestañas",
+    "Perfilado de cejas", "Microblading", "Maquilladora", "Peinadora",
+    "Peluquera", "Barbero", "Cosmetóloga", "Esteticista", "Depilación",
+    "Masajes estéticos",
+]
+
+_RUBROS_FOR_PROMPT = ", ".join(CANONICAL_RUBROS)
+
+_AI_EXTRACT_SYSTEM = (
+    "Sos un asistente que extrae información de búsqueda de servicios a domicilio en Argentina.\n"
+    "Dado un mensaje del usuario, devolvé ÚNICAMENTE un JSON con dos campos:\n"
+    '  "rubro": el servicio solicitado, elegido de esta lista exacta: ' + _RUBROS_FOR_PROMPT + ".\n"
+    '  "zona": el barrio, localidad o ciudad mencionado, o null si no hay.\n'
+    "Si el servicio no coincide con ninguno de la lista, elegí el más cercano semánticamente.\n"
+    "No incluyas texto fuera del JSON."
+)
 
 
 logger = logging.getLogger(__name__)
@@ -95,11 +162,13 @@ class ProviderSearchService:
         *,
         memory_config: Any,
         agent_logger: Any | None = None,
-        openai_client: Any | None = None,
+        openai_client: AsyncOpenAI | None = None,
+        openai_model: str = "gpt-4o-mini",
     ) -> None:
         self._memory_config = memory_config
         self._alog = agent_logger
-        # openai_client kept for MemorySummarizer/Extractor if needed by callers
+        self._openai = openai_client
+        self._openai_model = openai_model
 
     # ── public entry points ────────────────────────────────────────────────
 
@@ -139,12 +208,13 @@ class ProviderSearchService:
         )
 
         if paso == "awaiting_need":
-            rubro = self._extract_search_need(message, allow_plain=True)
+            ai_rubro, ai_zone = await self._ai_extract_rubro_and_zone(message)
+            rubro = ai_rubro or self._extract_search_need(message, allow_plain=True)
             if rubro is None:
                 self._log(turn_id, "guided_search.awaiting_need.no_match", message_preview=message[:80])
                 return None
             if search_location is None:
-                inline_zone = self._extract_inline_zone(message)
+                inline_zone = ai_zone or self._extract_inline_zone(message)
                 if inline_zone is not None:
                     search_location = {"barrio": inline_zone}
                     self._log(
@@ -201,7 +271,22 @@ class ProviderSearchService:
         if not self._is_search_start(message, metadata):
             return None
 
-        rubro = self._extract_search_need(message, allow_plain=True)
+        # When triggered by the post-terms button the message carries no real
+        # service intent — skip AI extraction to avoid a hallucinated rubro.
+        button_triggered = bool(
+            metadata
+            and (
+                metadata.get("button_id") == SEARCH_BUTTON_ID
+                or metadata.get("selected_id") == SEARCH_BUTTON_ID
+            )
+        )
+        if button_triggered:
+            rubro = None
+            ai_zone = None
+        else:
+            ai_rubro, ai_zone = await self._ai_extract_rubro_and_zone(message)
+            rubro = ai_rubro or self._extract_search_need(message, allow_plain=True)
+
         if rubro is None:
             self._log(turn_id, "guided_search.fresh.no_rubro", message_preview=message[:80])
             await self._save_search_state(state_repo, user_id, "awaiting_need")
@@ -216,7 +301,7 @@ class ProviderSearchService:
             )
 
         if search_location is None:
-            inline_zone = self._extract_inline_zone(message)
+            inline_zone = ai_zone or self._extract_inline_zone(message)
             if inline_zone is not None:
                 search_location = {"barrio": inline_zone}
                 self._log(
@@ -297,9 +382,9 @@ class ProviderSearchService:
 
                 content = getattr(part, "content", None)
                 if not isinstance(content, list) or not content:
-                    return None
+                    continue
                 if not all(isinstance(item, dict) for item in content):
-                    return None
+                    continue
                 return content
 
         return None
@@ -307,7 +392,7 @@ class ProviderSearchService:
     async def store_search_location_if_available(
         self,
         memory_service: MemoryService,
-        user_id: str,
+        user_id: int,
         metadata: dict[str, Any] | None,
     ) -> None:
         """Persist the most recent shared location so future searches can reuse it."""
@@ -357,7 +442,7 @@ class ProviderSearchService:
         )
 
         await EstadoRepository(deps.db).delete(deps.user_id)
-        await self._persist_search_location(memory_service, deps.user_id, location)
+        await self._persist_search_location(memory_service, deps.usuario_id, location)
 
         if not providers:
             location_label = self._location_label(location) or "tu zona"
@@ -540,10 +625,7 @@ class ProviderSearchService:
         if any(normalized.startswith(prefix) for prefix in SEARCH_PREFIXES):
             return True
 
-        return (
-            ProviderSearchService._extract_search_need(message, allow_plain=True) is not None
-            and ProviderSearchService._extract_location_fragment(normalized) is not None
-        )
+        return False
 
     @staticmethod
     def _extract_search_need(message: str, allow_plain: bool) -> str | None:
@@ -569,6 +651,7 @@ class ProviderSearchService:
 
         if len(words) == 1 and words[0] in {"servicio", "servicios", "ayuda"}:
             return None
+
         return " ".join(words[:3])
 
     @staticmethod
@@ -584,11 +667,7 @@ class ProviderSearchService:
             if ProviderSearchService._extract_search_need(message, allow_plain=True) is None:
                 return None
 
-        parts = re.split(LOCATION_SPLIT_PATTERN, candidate, maxsplit=1)
-        if len(parts) < 2:
-            return None
-
-        zone = ProviderSearchService._clean_zone_text(parts[1])
+        zone = ProviderSearchService._extract_location_fragment(candidate)
         if not zone:
             return None
 
@@ -626,6 +705,9 @@ class ProviderSearchService:
         """Return the location suffix after a connector like 'en' when present."""
         parts = re.split(LOCATION_SPLIT_PATTERN, text, maxsplit=1)
         if len(parts) < 2:
+            return None
+
+        if not parts[0].strip():
             return None
 
         zone = ProviderSearchService._clean_zone_text(parts[1])
@@ -668,7 +750,7 @@ class ProviderSearchService:
     async def _persist_search_location(
         self,
         memory_service: MemoryService,
-        user_id: str,
+        user_id: int,
         location: dict[str, Any],
     ) -> None:
         """Upsert coarse search-location fields into persistent user memory."""
@@ -733,3 +815,37 @@ class ProviderSearchService:
             self._alog.info(turn_id, event, **kwargs)
         except Exception:  # pragma: no cover — defensive, never fail search flow
             logger.debug("Agent logger failed for event %s", event, exc_info=True)
+
+    async def _ai_extract_rubro_and_zone(
+        self, message: str
+    ) -> tuple[str | None, str | None]:
+        """Use the LLM to extract the canonical rubro and optional zone.
+
+        Returns (rubro, zona) — either may be None if extraction fails.
+        Falls back to None/None when no OpenAI client is configured.
+        """
+        if self._openai is None:
+            return None, None
+        try:
+            resp = await self._openai.chat.completions.create(
+                model=self._openai_model,
+                messages=[
+                    {"role": "system", "content": _AI_EXTRACT_SYSTEM},
+                    {"role": "user", "content": message},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0,
+                max_tokens=64,
+            )
+            raw = resp.choices[0].message.content or "{}"
+            data = json.loads(raw)
+            rubro = data.get("rubro") or None
+            zona = data.get("zona") or None
+            # Validate rubro is in canonical list (case-insensitive)
+            if rubro:
+                canonical_lower = {r.lower(): r for r in CANONICAL_RUBROS}
+                rubro = canonical_lower.get(rubro.lower(), rubro)
+            return rubro, zona
+        except Exception:
+            logger.exception("AI rubro extraction failed, falling back to regex")
+            return None, None

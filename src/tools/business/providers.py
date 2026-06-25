@@ -45,7 +45,7 @@ class BuscarPrestadoresInput(BaseModel):
     lat: float | None = Field(default=None, description="Optional user latitude for ranking")
     lon: float | None = Field(default=None, description="Optional user longitude for ranking")
     solo_verificados: bool = Field(default=False)
-    limit: int = Field(default=5, ge=3, le=5)
+    limit: int = Field(default=3, ge=3, le=5)
     mensaje_contacto: str = Field(
         default="Hola, te contacto por ServiMatch para consultar sobre tus servicios.",
         description="Predefined message sent when the user taps 'Contactar'",
@@ -444,9 +444,16 @@ def _sanitize_search_params(
         params.barrio,
         params.ciudad,
     )
-    if barrio == params.barrio and ciudad == params.ciudad:
+    effective_limit = min(params.limit, 3)
+    if (
+        barrio == params.barrio
+        and ciudad == params.ciudad
+        and effective_limit == params.limit
+    ):
         return params
-    return params.model_copy(update={"barrio": barrio, "ciudad": ciudad})
+    return params.model_copy(
+        update={"barrio": barrio, "ciudad": ciudad, "limit": effective_limit}
+    )
 
 
 def _sanitize_location_fields(
@@ -534,69 +541,69 @@ _TRADE_SYNONYM_STEMS: dict[str, tuple[str, ...]] = {
     # gas / gasista
     "gas": ("gasist", "gas"),
     # plomero / plomeria / plomera
-    "plomer": ("plomer"),
+    "plomer": ("plomer",),
     # cerrajero / cerrajeria
     "cerraj": ("cerrajer", "cerraj"),
     # albañil / albañileria
-    "albañil": ("albañil"),
-    "albanni": ("albannil"),
+    "albañil": ("albañil",),
+    "albanni": ("albannil",),
     # pintor / pintura
     "pintor": ("pint"),
     "pintur": ("pint"),
     # herrero / herreria
-    "herr": ("herr"),
+    "herr": ("herr",),
     # carpintero / carpinteria
-    "carpinter": ("carpinter"),
+    "carpinter": ("carpinter",),
     # jardinero / jardineria
-    "jardin": ("jardin"),
+    "jardin": ("jardin",),
     # fontanero / fontaneria
-    "fontan": ("fontan"),
+    "fontan": ("fontan",),
     # cocinero / cocina
-    "cocin": ("cocin"),
+    "cocin": ("cocin",),
     # profesor / profesorado
-    "profesor": ("profesor"),
+    "profesor": ("profesor",),
     # abogado / abogacia
-    "abog": ("abog"),
+    "abog": ("abog",),
     # contador / contaduria
-    "contador": ("contador"),
+    "contador": ("contador",),
     # medico / medicina
-    "medic": ("medic"),
+    "medic": ("medic",),
     # enfermero / enfermeria
-    "enfermer": ("enfermer"),
+    "enfermer": ("enfermer",),
     # veterinario / veterinaria
-    "veterinari": ("veterinari"),
+    "veterinari": ("veterinari",),
     # ingeniero / ingenieria
-    "ingenier": ("ingenier"),
+    "ingenier": ("ingenier",),
     # arquitecto / arquitectura
-    "arquitect": ("arquitect"),
+    "arquitect": ("arquitect",),
     # tecnico / tecnica
-    "tecnic": ("tecnic"),
+    "tecnic": ("tecnic",),
     # reparador / reparacion
-    "repar": ("repar"),
+    "repar": ("repar",),
     # limpieza / limpiador
-    "limpi": ("limpi"),
+    "limpi": ("limpi",),
     # cuidado / cuidador
-    "cuidad": ("cuidad"),
+    "cuidad": ("cuidad",),
     # mascota / paseador
-    "mascot": ("mascot"),
+    "mascot": ("mascot",),
     # seguridad / vigilador
-    "segur": ("segur"),
+    "segur": ("segur",),
     # profesor / maestro
-    "profes": ("profes"),
+    "profes": ("profes",),
     # traductor / traduccion
-    "traductor": ("traductor"),
-    "traduccion": ("traduccion"),
+    "traductor": ("traductor",),
+    "traduccion": ("traduccion",),
     # chofer / transporte
-    "chofer": ("chofer"),
-    "conduct": ("conduct"),
-    "transport": ("transport"),
+    "chofer": ("chofer",),
+    "conduct": ("conduct",),
+    "transport": ("transport",),
     # flete / mudanza
-    "flet": ("flet"),
-    "mudanz": ("mudanz"),
-    "mudanza": ("mudanza"),
+    "flet": ("flet",),
+    "mudanz": ("mudanz",),
+    "mudanza": ("mudanza",),
     # niñero / niñera / niñera
-    "niñer": ("niñer"),
-    "ninier": ("ninier"),
+    "niñer": ("niñer",),
+    "ninier": ("ninier",),
 }
 
 

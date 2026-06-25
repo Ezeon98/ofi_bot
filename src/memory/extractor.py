@@ -29,6 +29,8 @@ Rules:
 - Use short snake_case keys (e.g. nombre, ciudad, rubro, preferencia_contacto).
 - Assign importance 0.0–1.0 (1.0 = essential identity fact, 0.5 = useful preference).
 - Skip trivial or transient information.
+- NEVER use these reserved keys, they are managed by the system: \
+search_barrio, search_ciudad, search_latitude, search_longitude.
 - Return valid JSON: {"facts": [{"key": "...", "value": "...", "importance": 0.8}, ...]}.
 - If nothing is worth remembering, return {"facts": []}.
 """

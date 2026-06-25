@@ -34,7 +34,7 @@ class MemoryRepository:
 
     async def get_by_user(
         self,
-        user_id: str,
+        user_id: int,
         min_importance: float = 0.0,
         limit: int = 50,
     ) -> list[MemoryRead]:
@@ -52,7 +52,7 @@ class MemoryRepository:
         rows = await self._session.scalars(stmt)
         return [MemoryRead.model_validate(r) for r in rows]
 
-    async def upsert(self, user_id: str, data: MemoryUpsert) -> MemoryRead:
+    async def upsert(self, user_id: int, data: MemoryUpsert) -> MemoryRead:
         """Insert or update a memory by (user_id, key)."""
         stmt = select(UserMemoryModel).where(
             UserMemoryModel.user_id == user_id,
@@ -78,7 +78,7 @@ class MemoryRepository:
         await self._session.flush()
         return MemoryRead.model_validate(record)
 
-    async def delete_by_key(self, user_id: str, key: str) -> None:
+    async def delete_by_key(self, user_id: int, key: str) -> None:
         await self._session.execute(
             delete(UserMemoryModel).where(
                 UserMemoryModel.user_id == user_id,
@@ -86,13 +86,13 @@ class MemoryRepository:
             )
         )
 
-    async def count_by_user(self, user_id: str) -> int:
+    async def count_by_user(self, user_id: int) -> int:
         from sqlalchemy import func
 
         stmt = select(func.count()).where(UserMemoryModel.user_id == user_id)
         return await self._session.scalar(stmt) or 0
 
-    async def drop_least_important(self, user_id: str, keep: int) -> None:
+    async def drop_least_important(self, user_id: int, keep: int) -> None:
         """Delete memories beyond `keep`, discarding lowest-importance ones first."""
         stmt = (
             select(UserMemoryModel.id)
@@ -113,7 +113,7 @@ class ConversationRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_or_create_active(self, user_id: str) -> ConversationRead:
+    async def get_or_create_active(self, user_id: int) -> ConversationRead:
         """Return the active (most recent) conversation, creating one if needed."""
         stmt = (
             select(ConversationModel)

@@ -218,7 +218,7 @@ class ProviderRegistrationService:
 
         if self._memory_config.enabled and state.get("edad") is not None:
             await memory_service.upsert_memory(
-                user_id,
+                deps.usuario_id,
                 "provider_registration_age",
                 str(state["edad"]),
                 0.8,

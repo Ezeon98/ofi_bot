@@ -36,6 +36,7 @@ from src.agents.models.response import AgentResponse, Intent
 from src.agents.router_agent import router_agent
 from src.context.builder import ContextBuilder
 from src.infrastructure.config import Settings
+from src.infrastructure.database.repositories.usuario import UsuarioRepository
 from src.memory.extractor import MemoryExtractor
 from src.memory.models import MemoryConfig
 from src.memory.service import MemoryService
@@ -94,6 +95,8 @@ class AIOrchestrator:
         self._provider_search = ProviderSearchService(
             memory_config=self._memory_config,
             agent_logger=self._alog,
+            openai_client=self._openai,
+            openai_model=settings.openai_model,
         )
 
     async def process(
@@ -118,15 +121,27 @@ class AIOrchestrator:
         )
 
         memory_service = self._build_memory_service(db)
+
+        # Resolve the integer DB id once for the whole pipeline.
+        usuario_id = await self._resolve_usuario_id(db, user_id)
+        if usuario_id is None:
+            logger.warning("No usuario found for telefono %s", user_id)
+            return OrchestratorResponse(
+                message="No pudimos identificarte. Por favor escribinos de nuevo.",
+                source="error",
+                intent=Intent.CONVERSACION_GENERAL.value,
+                confidence=0.0,
+            )
+
         await self._provider_search.store_search_location_if_available(
             memory_service,
-            user_id,
+            usuario_id,
             metadata,
         )
 
         # ── 1-3. Memory + history + context ──────────────────────────────
-        memories = await memory_service.get_memories(user_id)
-        conversation = await memory_service.get_or_create_conversation(user_id)
+        memories = await memory_service.get_memories(usuario_id)
+        conversation = await memory_service.get_or_create_conversation(usuario_id)
         recent_turns = await memory_service.get_recent_turns(conversation.id)
 
         self._alog.info(
@@ -155,6 +170,7 @@ class AIOrchestrator:
         deps = AgentDependencies(
             db=db,
             user_id=user_id,
+            usuario_id=usuario_id,
             memory_service=memory_service,
             memory_config=self._memory_config,
             current_message_metadata=metadata,
@@ -180,7 +196,7 @@ class AIOrchestrator:
             )
             if context.conversation_id is not None:
                 await memory_service.process_interaction(
-                    user_id=user_id,
+                    user_id=usuario_id,
                     user_message=message,
                     assistant_response=registration_response.message,
                     conversation_id=context.conversation_id,
@@ -211,7 +227,7 @@ class AIOrchestrator:
             )
             if context.conversation_id is not None:
                 await memory_service.process_interaction(
-                    user_id=user_id,
+                    user_id=usuario_id,
                     user_message=message,
                     assistant_response=shortcut_response.message,
                     conversation_id=context.conversation_id,
@@ -276,9 +292,7 @@ class AIOrchestrator:
         try:
             if context.conversation_id is not None:
                 await memory_service.process_interaction(
-                    user_id=user_id,
-                    user_message=message,
-                    assistant_response=agent_response.message,
+                    user_id=usuario_id,
                     conversation_id=context.conversation_id,
                     intent=agent_response.intent.value,
                 )
@@ -344,6 +358,11 @@ class AIOrchestrator:
             summarizer=MemorySummarizer(self._openai, model="gpt-4o-mini"),
             config=self._memory_config,
         )
+
+    @staticmethod
+    async def _resolve_usuario_id(db: AsyncSession, telefono: str) -> int | None:
+        """Map the inbound phone number to usuarios.id for internal FK usage."""
+        return await UsuarioRepository(db).get_id_by_telefono(telefono)
 
     @staticmethod
     def _build_user_prompt(

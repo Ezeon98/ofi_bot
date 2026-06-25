@@ -23,6 +23,28 @@ providers = _load_providers_module()
 class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
     """Validate ranking behavior when origin coordinates are available."""
 
+    def test_rubro_search_terms_do_not_expand_to_single_letters(self) -> None:
+        """Profession synonyms should not degrade into one-character wildcards."""
+        terms = providers._build_rubro_search_terms("plomero")
+
+        self.assertIn("%plomero%", terms)
+        self.assertIn("%plomer%", terms)
+        self.assertNotIn("%p%", terms)
+        self.assertNotIn("%o%", terms)
+
+    def test_search_params_clamp_limit_to_three(self) -> None:
+        """Searches should never return more than three provider cards."""
+        params = providers.BuscarPrestadoresInput(
+            rubro="plomero",
+            barrio="Castelar",
+            ciudad="Castelar",
+            limit=5,
+        )
+
+        sanitized = providers._sanitize_search_params(params)
+
+        self.assertEqual(sanitized.limit, 3)
+
     def test_search_params_strip_trade_text_from_barrio(self) -> None:
         """Barrio inputs contaminated with the rubro should keep only the zone."""
         params = providers.BuscarPrestadoresInput(
@@ -51,13 +73,13 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             facturacion="monotributo",
         )
 
-        async def scalars_side_effect(stmt):
+        async def execute_side_effect(stmt):
             sql = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
             if "%plomer%" in sql and "%plomero%" in sql:
-                return [palermo_provider]
+                return [(palermo_provider, "5491100001001")]
             return []
 
-        fake_db = SimpleNamespace(scalars=AsyncMock(side_effect=scalars_side_effect))
+        fake_db = SimpleNamespace(execute=AsyncMock(side_effect=execute_side_effect))
         ctx = SimpleNamespace(
             deps=SimpleNamespace(
                 db=fake_db,
@@ -67,8 +89,8 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
 
         with patch.object(
             providers,
-            "_provider_trade_names",
-            new=AsyncMock(return_value=["Plomeria"]),
+            "_batch_provider_trade_names",
+            new=AsyncMock(return_value={1: ["Plomeria"]}),
         ):
             results = await providers.buscar_prestadores(
                 ctx,
@@ -117,7 +139,15 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             facturacion="monotributo",
         )
 
-        fake_db = SimpleNamespace(scalars=AsyncMock(return_value=[verified_far, verified_near, unverified_near]))
+        fake_db = SimpleNamespace(
+            execute=AsyncMock(
+                return_value=[
+                    (verified_far, "5491100001001"),
+                    (verified_near, "5491100001002"),
+                    (unverified_near, "5491100001003"),
+                ]
+            )
+        )
         ctx = SimpleNamespace(
             deps=SimpleNamespace(
                 db=fake_db,
@@ -127,8 +157,14 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
 
         with patch.object(
             providers,
-            "_provider_trade_names",
-            new=AsyncMock(return_value=["Plomeria"]),
+            "_batch_provider_trade_names",
+            new=AsyncMock(
+                return_value={
+                    1: ["Plomeria"],
+                    2: ["Plomeria"],
+                    3: ["Plomeria"],
+                }
+            ),
         ):
             results = await providers.buscar_prestadores(
                 ctx,
@@ -167,7 +203,14 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             facturacion="monotributo",
         )
 
-        fake_db = SimpleNamespace(scalars=AsyncMock(return_value=[far_verified, near_verified]))
+        fake_db = SimpleNamespace(
+            execute=AsyncMock(
+                return_value=[
+                    (far_verified, "5491100001001"),
+                    (near_verified, "5491100001002"),
+                ]
+            )
+        )
         ctx = SimpleNamespace(
             deps=SimpleNamespace(
                 db=fake_db,
@@ -178,8 +221,13 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
         with (
             patch.object(
                 providers,
-                "_provider_trade_names",
-                new=AsyncMock(return_value=["Plomeria"]),
+                "_batch_provider_trade_names",
+                new=AsyncMock(
+                    return_value={
+                        1: ["Plomeria"],
+                        2: ["Plomeria"],
+                    }
+                ),
             ),
             patch.object(
                 providers,

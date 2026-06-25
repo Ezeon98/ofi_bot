@@ -20,7 +20,8 @@ class AgentDependencies:
     """Everything a tool needs, injected at call time."""
 
     db: AsyncSession
-    user_id: str
+    user_id: str  # telefono — used for state repo, logging and external comms
+    usuario_id: int  # usuarios.id — used for memory/conversation DB operations
     memory_service: MemoryService
     memory_config: MemoryConfig
     current_message_metadata: dict[str, Any] | None = None

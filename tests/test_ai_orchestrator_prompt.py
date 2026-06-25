@@ -8,6 +8,7 @@ from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.agents.models.response import Intent, Message, MessageAction
+from src.agents.prompts.router import ROUTER_SYSTEM_PROMPT
 from src.memory.schemas import MemoryRead
 
 
@@ -55,6 +56,12 @@ def test_build_user_prompt_includes_metadata_block() -> None:
     assert "Mensaje actual del usuario: Quiero un plomero" in prompt
 
 
+def test_router_prompt_requires_inference_from_problem_descriptions() -> None:
+    """The agent prompt should tell the model to infer the trade from the issue."""
+    assert "inferí el rubro más probable" in ROUTER_SYSTEM_PROMPT
+    assert '"en mi casa"' in ROUTER_SYSTEM_PROMPT
+
+
 class AIOrchestratorFailureTests(IsolatedAsyncioTestCase):
     """Validate error handling around agent execution and persistence."""
 
@@ -66,6 +73,7 @@ class AIOrchestratorFailureTests(IsolatedAsyncioTestCase):
             memory_max_tokens=2000,
             memory_summarize_after=50,
             memory_importance_threshold=0.7,
+            agent_logging_enabled=False,
             openai_api_key=SimpleNamespace(get_secret_value=lambda: ""),
             openai_model="gpt-4o-mini",
         )
@@ -86,13 +94,19 @@ class AIOrchestratorFailureTests(IsolatedAsyncioTestCase):
                 return_value=memory_service,
             ),
             patch.object(
-                ai_orchestrator,
-                "EstadoRepository",
-                return_value=SimpleNamespace(
-                    get=AsyncMock(return_value={}),
-                    save=AsyncMock(),
-                    delete=AsyncMock(),
-                ),
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_handle_guided_search",
+                new=AsyncMock(return_value=None),
             ),
             patch.object(
                 ai_orchestrator,
@@ -146,12 +160,17 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
         """A direct service request without a saved location should ask for one."""
         memory_service = self._memory_service()
         db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
-        state_repo = SimpleNamespace(
-            get=AsyncMock(return_value={}),
-            save=AsyncMock(),
-            delete=AsyncMock(),
-        )
         router_run = AsyncMock()
+        guided_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.BUSCAR_SERVICIO,
+            message=(
+                "Para buscar plomero cerca tuyo, compartime tu ubicación de WhatsApp "
+                "o escribime tu barrio o localidad."
+            ),
+            confidence=1.0,
+            entities={"rubro": "plomero"},
+            requires_action=False,
+        )
 
         with (
             patch.object(ai_orchestrator, "AsyncOpenAI", return_value=object()),
@@ -161,9 +180,14 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
                 return_value=memory_service,
             ),
             patch.object(
-                ai_orchestrator,
-                "EstadoRepository",
-                return_value=state_repo,
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=AsyncMock(return_value=None),
             ),
             patch.object(
                 ai_orchestrator,
@@ -173,7 +197,7 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             patch.object(
                 ai_orchestrator.ProviderSearchService,
                 "maybe_handle_guided_search",
-                new=AsyncMock(return_value=None),
+                new=AsyncMock(return_value=guided_response),
             ),
         ):
             orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
@@ -184,7 +208,9 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
                 metadata={"message_type": "text"},
             )
 
-        self.assertEqual(response.intent, Intent.CONVERSACION_GENERAL.value)
+        self.assertEqual(response.intent, Intent.BUSCAR_SERVICIO.value)
+        self.assertEqual(response.source, "shortcut")
+        self.assertIn("compartime tu ubicación", response.message)
         router_run.assert_not_awaited()
 
     async def test_process_uses_saved_location_and_returns_results(self) -> None:
@@ -193,7 +219,7 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
         memories = [
             MemoryRead(
                 id=1,
-                user_id="5491112345678",
+                user_id=71,
                 key="search_latitude",
                 value="-34.6037",
                 importance=0.95,
@@ -202,7 +228,7 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             ),
             MemoryRead(
                 id=2,
-                user_id="5491112345678",
+                user_id=71,
                 key="search_longitude",
                 value="-58.3816",
                 importance=0.95,
@@ -245,6 +271,16 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
                 ai_orchestrator.AIOrchestrator,
                 "_build_memory_service",
                 return_value=memory_service,
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=AsyncMock(return_value=None),
             ),
             patch.object(
                 ai_orchestrator,
@@ -364,6 +400,16 @@ class AIOrchestratorProviderFormattingTests(IsolatedAsyncioTestCase):
                 return_value=memory_service,
             ),
             patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
                 ai_orchestrator,
                 "router_agent",
                 new=SimpleNamespace(run=router_run),
@@ -384,9 +430,103 @@ class AIOrchestratorProviderFormattingTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(response.intent, Intent.BUSCAR_SERVICIO.value)
         self.assertEqual(response.source, "llm")
-        self.assertEqual(response.message, "Encontré 2 electricista cerca de Caballito:")
+        self.assertEqual(
+            response.message,
+            "Encontramos 2 electricista que podrían ayudarte en Caballito:",
+        )
         self.assertEqual(len(response.messages), 2)
         self.assertIn("Maria Electricista", response.messages[0]["text"])
         self.assertIn("Sofia Tecnica", response.messages[1]["text"])
         self.assertEqual(response.messages[0]["action"]["label"], "Contactar")
         self.assertEqual(response.metadata["providers"][0]["nombre"], "Maria Electricista")
+
+    async def test_process_rebuilds_provider_cards_ignoring_duplicate_block_after_results(self) -> None:
+        """A duplicate-blocked retry should not hide the previous valid provider list."""
+        memory_service = self._memory_service()
+        db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+        collapsed_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.BUSCAR_SERVICIO,
+            message="No encontré plomeros en Castelar.",
+            confidence=1.0,
+            entities={"rubro": "plomero", "barrio": "Castelar"},
+            requires_action=True,
+        )
+        tool_messages = [
+            SimpleNamespace(
+                parts=[
+                    SimpleNamespace(
+                        part_kind="tool-return",
+                        tool_name="tool_buscar_prestadores",
+                        content=[
+                            {
+                                "nombre": "Juan Plomero",
+                                "rubros": ["Plomeria"],
+                                "badge_verificado": True,
+                                "barrio": "Castelar",
+                                "ciudad": "Morón",
+                                "telefono": "5491100001001",
+                                "distance_km": 1.4,
+                            }
+                        ],
+                    ),
+                    SimpleNamespace(
+                        part_kind="tool-return",
+                        tool_name="tool_buscar_prestadores",
+                        content={
+                            "info": "duplicate_call_blocked",
+                            "message": "Ya buscaste plomero en Castelar.",
+                            "rubro": "plomero",
+                        },
+                    ),
+                ]
+            )
+        ]
+        router_run = AsyncMock(
+            return_value=SimpleNamespace(
+                output=collapsed_response,
+                new_messages=lambda: tool_messages,
+            )
+        )
+
+        with (
+            patch.object(ai_orchestrator, "AsyncOpenAI", return_value=object()),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_memory_service",
+                return_value=memory_service,
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                ai_orchestrator,
+                "router_agent",
+                new=SimpleNamespace(run=router_run),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_handle_guided_search",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
+            response = await orchestrator.process(
+                user_id="5491112345678",
+                message="Se rompio un caño en castelar",
+                db=db,
+                metadata={"message_type": "text"},
+            )
+
+        self.assertEqual(
+            response.message,
+            "Encontramos 1 plomero que podrían ayudarte en Castelar:",
+        )
+        self.assertEqual(len(response.messages), 1)
+        self.assertIn("Juan Plomero", response.messages[0]["text"])

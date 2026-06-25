@@ -37,7 +37,7 @@ class MemoryService:
 
     # ── Public read interface ────────────────────────────────────────────
 
-    async def get_memories(self, user_id: str) -> list[MemoryRead]:
+    async def get_memories(self, user_id: int) -> list[MemoryRead]:
         if not self._config.enabled:
             return []
         return await self._memories.get_by_user(
@@ -46,7 +46,7 @@ class MemoryService:
             limit=self._config.max_memories,
         )
 
-    async def get_or_create_conversation(self, user_id: str) -> ConversationRead:
+    async def get_or_create_conversation(self, user_id: int) -> ConversationRead:
         return await self._conversations.get_or_create_active(user_id)
 
     async def get_recent_turns(
@@ -65,12 +65,12 @@ class MemoryService:
     ) -> ConversationTurnRead:
         return await self._conversations.add_turn(conversation_id, role, content, intent)
 
-    async def upsert_memory(self, user_id: str, key: str, value: str, importance: float = 0.7) -> MemoryRead:
+    async def upsert_memory(self, user_id: int, key: str, value: str, importance: float = 0.7) -> MemoryRead:
         return await self._memories.upsert(user_id, MemoryUpsert(key=key, value=value, importance=importance))
 
     async def process_interaction(
         self,
-        user_id: str,
+        user_id: int,
         user_message: str,
         assistant_response: str,
         conversation_id: int,
@@ -105,7 +105,7 @@ class MemoryService:
 
     # ── Internal ─────────────────────────────────────────────────────────
 
-    async def _maybe_summarize(self, conversation_id: int, user_id: str) -> None:
+    async def _maybe_summarize(self, conversation_id: int, user_id: int) -> None:
         keep_last = 10  # ponytail: keep a short recency window after summarising
         turns = await self._conversations.get_recent_turns(conversation_id, limit=self._config.summarize_after)
         if not turns:

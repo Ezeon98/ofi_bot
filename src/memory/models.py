@@ -21,7 +21,7 @@ class MemoryEntry(BaseModel):
     """In-memory representation of a single user memory."""
 
     id: int | None = None
-    user_id: str
+    user_id: int
     key: str
     value: str
     importance: float = Field(default=0.5, ge=0.0, le=1.0)

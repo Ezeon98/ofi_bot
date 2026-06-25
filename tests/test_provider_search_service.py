@@ -211,21 +211,10 @@ class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["rubro"], "electricistas")
         self.assertEqual(kwargs["location"], {"barrio": "caballito"})
 
-    async def test_initial_search_strips_zone_filler_phrases(self) -> None:
-        """The shortcut should separate rubro and zone from natural phrasing."""
+    async def test_problem_statement_with_shared_location_defers_to_agent(self) -> None:
+        """Narrative problems should bypass the shortcut so the agent can infer the rubro."""
         service = ProviderSearchService(
             memory_config=SimpleNamespace(enabled=True),
-        )
-        expected = AgentResponse(
-            intent=Intent.BUSCAR_SERVICIO,
-            message="Encontramos 2 electricistas que podrían ayudarte en caballito:",
-            messages=[
-                Message(text="👤 Maria Electricista"),
-                Message(text="👤 Sofia Tecnica"),
-            ],
-            confidence=1.0,
-            entities={"rubro": "electricista", "barrio": "caballito"},
-            requires_action=True,
         )
 
         with (
@@ -238,11 +227,40 @@ class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
                     delete=AsyncMock(),
                 ),
             ),
+        ):
+            response = await service.maybe_handle_guided_search(
+                user_id="5491162527111",
+                message="En mi casa se rompio un caño de agua",
+                metadata={
+                    "message_type": "location",
+                    "latitude": -34.6205897,
+                    "longitude": -58.4413922,
+                    "barrio": "Caballito",
+                },
+                deps=SimpleNamespace(db=object()),
+                memory_service=SimpleNamespace(),
+                memories=[],
+                turn_id="turn-broken-pipe",
+            )
+
+        self.assertIsNone(response)
+
+    async def test_unprefixed_trade_phrase_defers_to_agent(self) -> None:
+        """Fresh searches without an explicit search trigger should go to the agent."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+
+        with (
             patch.object(
-                ProviderSearchService,
-                "_build_search_results_response",
-                new=AsyncMock(return_value=expected),
-            ) as build_response_mock,
+                provider_search_service,
+                "EstadoRepository",
+                return_value=SimpleNamespace(
+                    get=AsyncMock(return_value={}),
+                    save=AsyncMock(),
+                    delete=AsyncMock(),
+                ),
+            ),
         ):
             response = await service.maybe_handle_guided_search(
                 user_id="5491162527111",
@@ -254,10 +272,7 @@ class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
                 turn_id="turn-3",
             )
 
-        self.assertIs(response, expected)
-        _, kwargs = build_response_mock.await_args
-        self.assertEqual(kwargs["rubro"], "electricista")
-        self.assertEqual(kwargs["location"], {"barrio": "caballito"})
+        self.assertIsNone(response)
 
     async def test_awaiting_zone_strips_trade_prefix_from_location_reply(self) -> None:
         """A zone reply like 'electricista en caballito' should keep only the zone."""
