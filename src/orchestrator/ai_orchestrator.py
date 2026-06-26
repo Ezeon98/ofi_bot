@@ -239,6 +239,33 @@ class AIOrchestrator:
             await db.commit()
             return self._to_orchestrator_response(shortcut_response, source="shortcut")
 
+        # ── 4d. Location-update shortcut ──────────────────────────────────
+        location_response = await self._provider_search.maybe_handle_location_update(
+            user_id=user_id,
+            message=message,
+            deps=deps,
+            memory_service=memory_service,
+            metadata=metadata,
+            turn_id=turn_id,
+        )
+        if location_response is not None:
+            self._alog.info(
+                turn_id, "pipeline.shortcut",
+                intent=location_response.intent.value,
+                response_preview=location_response.message[:120],
+                elapsed_ms=(time.monotonic() - _start) * 1000,
+            )
+            if context.conversation_id is not None:
+                await memory_service.process_interaction(
+                    user_id=usuario_id,
+                    user_message=message,
+                    assistant_response=location_response.message,
+                    conversation_id=context.conversation_id,
+                    intent=location_response.intent.value,
+                )
+            await db.commit()
+            return self._to_orchestrator_response(location_response, source="shortcut")
+
         # ── 5. Run agent ──────────────────────────────────────────────────
         system_context = context.to_system_context()
         user_prompt = self._build_user_prompt(message, system_context, metadata)
@@ -380,7 +407,15 @@ class AIOrchestrator:
                 {
                     "text": m.text,
                     "action": (
-                        {"type": m.action.type, "label": m.action.label, "url": m.action.url}
+                        {
+                            "type": m.action.type,
+                            "label": m.action.label,
+                            "url": m.action.url,
+                            "buttons": [
+                                {"id": button.id, "title": button.title}
+                                for button in m.action.buttons
+                            ],
+                        }
                         if m.action
                         else None
                     ),

@@ -203,3 +203,76 @@ class RouterShortcutTests(IsolatedAsyncioTestCase):
         self.assertEqual(enviar_boton_cta_mock.await_count, 2)
         self.assertEqual(sent_events[0], ("message", "Encontré 2 electricistas cerca de Centro:"))
         self.assertEqual(sent_events[1][0], "cta")
+
+    async def test_provider_results_can_send_reply_buttons_after_cards(self) -> None:
+        """Interactive follow-ups should be delivered through quick reply buttons."""
+        orchestrator = SimpleNamespace(
+            process=AsyncMock(
+                return_value=SimpleNamespace(
+                    message="Encontré 3 electricistas cerca de Centro:",
+                    source="orchestrator",
+                    messages=[
+                        {
+                            "text": "👤 Electricista Uno",
+                            "action": {
+                                "type": "cta_url",
+                                "label": "Contactar",
+                                "url": "https://example.com/uno",
+                                "buttons": [],
+                            },
+                        },
+                        {
+                            "text": "Queres que te busque mas?",
+                            "action": {
+                                "type": "reply_buttons",
+                                "label": None,
+                                "url": None,
+                                "buttons": [
+                                    {"id": "provider_search_more_yes", "title": "SI"},
+                                    {"id": "provider_search_more_no", "title": "NO"},
+                                ],
+                            },
+                        },
+                    ],
+                    intent=Intent.BUSCAR_SERVICIO.value,
+                    confidence=1.0,
+                    entities={"rubro": "electricista", "barrio": "Centro"},
+                    requires_action=True,
+                    metadata=None,
+                )
+            )
+        )
+
+        with (
+            patch.object(router, "_get_orchestrator", return_value=orchestrator),
+            patch.object(router, "enviar_typing", new=AsyncMock()),
+            patch.object(router, "enviar_mensaje", new=AsyncMock()) as enviar_mensaje_mock,
+            patch.object(router, "enviar_boton_cta", new=AsyncMock()) as enviar_boton_cta_mock,
+            patch.object(
+                router,
+                "enviar_botones_respuesta",
+                new=AsyncMock(),
+            ) as enviar_botones_mock,
+        ):
+            uow = SimpleNamespace(_session=object())
+            await router.procesar_texto(
+                uow,
+                "5491112345678",
+                "Necesito un electricista",
+                "wamid-3",
+                {"message_type": "text"},
+            )
+
+        enviar_mensaje_mock.assert_awaited_once_with(
+            "5491112345678",
+            "Encontré 3 electricistas cerca de Centro:",
+        )
+        enviar_boton_cta_mock.assert_awaited_once()
+        enviar_botones_mock.assert_awaited_once_with(
+            "5491112345678",
+            body_text="Queres que te busque mas?",
+            buttons=[
+                {"id": "provider_search_more_yes", "title": "SI"},
+                {"id": "provider_search_more_no", "title": "NO"},
+            ],
+        )

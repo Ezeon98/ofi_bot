@@ -21,7 +21,13 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from src.agents.dependencies import AgentDependencies
-from src.agents.models.response import AgentResponse, Intent, Message, MessageAction
+from src.agents.models.response import (
+    AgentResponse,
+    Intent,
+    Message,
+    MessageAction,
+    ReplyButton,
+)
 from src.infrastructure.external.whatsapp_client import build_whatsapp_contact_url
 from src.infrastructure.database.repositories.estado import EstadoRepository
 from src.memory.service import MemoryService
@@ -29,59 +35,7 @@ from src.memory.schemas import MemoryRead
 from src.tools.business.providers import BuscarPrestadoresInput, buscar_prestadores
 from src.tools.business.search_state import SEARCH_STATE_NAME
 from src.utils.geocoding import geocode_text_location
-
-# Canonical trade list — extracted from the official rubros catalogue.
-# The AI uses this list to normalise the user's rubro to a known trade name.
-CANONICAL_RUBROS: list[str] = [
-    "Albañil", "Maestro Mayor de Obras", "Techista", "Colocador de Durlock",
-    "Colocador de Cerámicos", "Yesero", "Pintor", "Impermeabilización",
-    "Hormigón y Contrapisos", "Constructor de Piscinas",
-    "Electricista domiciliario", "Electricista industrial",
-    "Instalación de luminarias", "Automatización y domótica",
-    "Instalación de cámaras", "Instalación de alarmas", "Porteros eléctricos",
-    "Plomero", "Gasista matriculado", "Destapaciones",
-    "Instalación de calefones", "Instalación de termotanques",
-    "Instalación de bombas de agua", "Reparación de pérdidas",
-    "Técnico en aire acondicionado", "Refrigeración comercial", "Calefacción",
-    "Instalación de estufas", "Mantenimiento HVAC",
-    "Carpintero", "Carpintero de obra", "Fabricación de muebles",
-    "Restauración de muebles", "Armado de muebles",
-    "Herrero", "Soldador", "Rejas y portones", "Estructuras metálicas",
-    "Automatización de portones",
-    "Mantenimiento integral", "Reparaciones generales",
-    "Colocación de cortinas", "Colocación de cuadros y estantes", "Cerrajería",
-    "Cerrajero", "Instalador de alarmas", "Instalador de cámaras",
-    "Control de acceso", "Cercos eléctricos",
-    "Jardinero", "Poda de árboles", "Paisajismo", "Sistemas de riego",
-    "Limpieza de terrenos", "Parquización",
-    "Limpieza domiciliaria", "Limpieza de oficinas", "Limpieza de finales de obra",
-    "Limpieza de vidrios", "Limpieza de tapizados", "Desinfección",
-    "Mudanzas", "Fletes", "Mini fletes", "Transporte de materiales",
-    "Transporte de muebles",
-    "Mecánico", "Electricidad automotor", "Gomería", "Chapista",
-    "Pintura automotor", "Auxilio mecánico",
-    "Técnico de PC", "Redes e Internet", "Reparación de celulares",
-    "Instalación de software", "Soporte IT", "Instalación de impresoras",
-    "Antenista", "Instalación de TV satelital", "Fibra óptica", "Redes WiFi",
-    "Diseñador gráfico", "Fotógrafo", "Videógrafo", "Community Manager",
-    "Diseñador web",
-    "Contador", "Abogado", "Escribano", "Arquitecto", "Ingeniero", "Agrimensor",
-    "Enfermero domiciliario", "Kinesiólogo", "Masajista", "Personal trainer",
-    "Nutricionista",
-    "Paseador de perros", "Peluquería canina", "Adiestrador",
-    "Cuidador de mascotas", "Veterinario a domicilio",
-    "DJ", "Sonido e iluminación", "Catering", "Mozo",
-    "Decoración de eventos", "Fotografía de eventos",
-    "Tornero", "Mecánico industrial", "Electromecánico",
-    "Mantenimiento industrial", "Instrumentación industrial",
-    "Alambrador", "Tractorista", "Mantenimiento rural", "Perforaciones",
-    "Sistemas de riego agrícola",
-    "Manicura", "Pedicura", "Nail Art", "Esculpidas en gel",
-    "Esculpidas acrílicas", "Lashista", "Lifting de pestañas",
-    "Perfilado de cejas", "Microblading", "Maquilladora", "Peinadora",
-    "Peluquera", "Barbero", "Cosmetóloga", "Esteticista", "Depilación",
-    "Masajes estéticos", "Niñera", "Cuidado de adultos mayores", "Cuidado de personas con discapacidad",
-]
+from src.utils.rubros import CANONICAL_RUBROS, resolve_canonical_rubro
 
 _RUBROS_FOR_PROMPT = ", ".join(CANONICAL_RUBROS)
 
@@ -98,12 +52,16 @@ _AI_EXTRACT_SYSTEM = (
 logger = logging.getLogger(__name__)
 
 LOCATION_MEMORY_KEYS = {
-    "lat": "search_latitude",
-    "lon": "search_longitude",
-    "ciudad": "search_ciudad",
-    "barrio": "search_barrio",
+    "lat": "latitude",
+    "lon": "longitude",
+    "ciudad": "ciudad",
+    "barrio": "barrio",
 }
 SEARCH_BUTTON_ID = "post_terms_seek_services"
+SEARCH_MORE_YES_BUTTON_ID = "provider_search_more_yes"
+SEARCH_MORE_NO_BUTTON_ID = "provider_search_more_no"
+PROVIDER_PAGE_SIZE = 3
+PROVIDER_SEARCH_FETCH_LIMIT = 15
 SEARCH_PREFIXES = (
     "buscarme un ",
     "buscarme una ",
@@ -152,6 +110,24 @@ ZONE_REPLY_PREFIXES = (
     "estoy en ",
     "vivo en ",
 )
+LOCATION_UPDATE_PREFIXES = (
+    "me mude a ",
+    "me mudé a ",
+    "me mude para ",
+    "me mudé para ",
+    "me cambie a ",
+    "me cambié a ",
+    "me cambie para ",
+    "me cambié para ",
+    "ahora vivo en ",
+    "estoy viviendo en ",
+    "cambie de casa a ",
+    "cambié de casa a ",
+    "cambie de domicilio a ",
+    "cambié de domicilio a ",
+    "mi nueva ubicacion es ",
+    "mi nueva ubicación es ",
+)
 
 
 class ProviderSearchService:
@@ -171,6 +147,58 @@ class ProviderSearchService:
         self._openai_model = openai_model
 
     # ── public entry points ────────────────────────────────────────────────
+
+    async def maybe_handle_location_update(
+        self,
+        *,
+        user_id: str,
+        message: str,
+        deps: AgentDependencies,
+        memory_service: MemoryService,
+        metadata: dict[str, Any] | None,
+        turn_id: str = "",
+    ) -> AgentResponse | None:
+        """Short-circuit location-update announcements before reaching the LLM.
+
+        Handles messages like "me mude a Avellaneda" by persisting the new
+        location in memory and returning without ever calling
+        tool_buscar_prestadores.
+        Returns None if the message is not a location update.
+        """
+        zone = self._extract_location_update(message)
+        if zone is None:
+            return None
+
+        self._log(turn_id, "location_update.detected", zone=zone)
+
+        location: dict[str, Any] = {"barrio": zone}
+        location = await self._enrich_location_with_coords(location)
+        display_zone = location.get("ciudad") or location.get("barrio") or zone
+
+        await self._persist_search_location(memory_service, deps.usuario_id, location)
+
+        # Clear any active guided-search state to avoid contaminating the next turn
+        state_repo = EstadoRepository(deps.db)
+        await state_repo.delete(user_id)
+
+        self._log(
+            turn_id, "location_update.persisted",
+            barrio=location.get("barrio"),
+            ciudad=location.get("ciudad"),
+            lat=location.get("lat"),
+            lon=location.get("lon"),
+        )
+
+        return AgentResponse(
+            intent=Intent.ACTUALIZAR_UBICACION,
+            message=(
+                f"Anoté que ahora estás en {display_zone}. "
+                "Si necesitás que te busque algo, decime el rubro."
+            ),
+            confidence=1.0,
+            entities={"barrio": location.get("barrio"), "ciudad": location.get("ciudad")},
+            requires_action=False,
+        )
 
     async def maybe_handle_guided_search(
         self,
@@ -266,6 +294,15 @@ class ProviderSearchService:
                 rubro=rubro,
                 location=search_location,
                 detail=detail,
+            )
+
+        if paso == "awaiting_more_results":
+            return await self._handle_more_results_reply(
+                state_repo=state_repo,
+                user_id=user_id,
+                message=message,
+                metadata=metadata,
+                state=state,
             )
 
         if not self._is_search_start(message, metadata):
@@ -438,7 +475,7 @@ class ProviderSearchService:
             ciudad=location.get("ciudad"),
             lat=location.get("lat"),
             lon=location.get("lon"),
-            limit=3,
+            limit=PROVIDER_SEARCH_FETCH_LIMIT,
         )
         ctx = SimpleNamespace(deps=deps)
         self._log(
@@ -455,10 +492,11 @@ class ProviderSearchService:
             provider_names=[p.get("nombre") for p in providers[:5]],
         )
 
-        await EstadoRepository(deps.db).delete(deps.user_id)
+        state_repo = EstadoRepository(deps.db)
         await self._persist_search_location(memory_service, deps.usuario_id, location)
 
         if not providers:
+            await state_repo.delete(deps.user_id)
             location_label = self._location_label(location) or "tu zona"
             return AgentResponse(
                 intent=Intent.BUSCAR_SERVICIO,
@@ -473,9 +511,25 @@ class ProviderSearchService:
             )
 
         location_label = self._location_label(location) or "tu ubicación"
+        current_page = providers[:PROVIDER_PAGE_SIZE]
+        pending_providers = providers[PROVIDER_PAGE_SIZE:]
         first_message, messages = ProviderSearchService._format_provider_results(
-            rubro, location_label, providers,
+            rubro, location_label, current_page,
         )
+        if pending_providers:
+            await self._save_search_state(
+                state_repo,
+                deps.user_id,
+                "awaiting_more_results",
+                rubro=rubro,
+                barrio=location.get("barrio"),
+                ciudad=location.get("ciudad"),
+                detalle=detail,
+                pending_providers=pending_providers,
+            )
+            messages.append(self._build_more_results_message())
+        else:
+            await state_repo.delete(deps.user_id)
         return AgentResponse(
             intent=Intent.BUSCAR_SERVICIO,
             message=first_message,
@@ -484,7 +538,7 @@ class ProviderSearchService:
             entities={"rubro": rubro, "barrio": location.get("barrio"),
                       "ciudad": location.get("ciudad"), "detalle": detail},
             requires_action=True,
-            metadata={"providers": providers},
+            metadata={"providers": current_page},
         )
 
     # ── location helpers ───────────────────────────────────────────────────
@@ -614,6 +668,28 @@ class ProviderSearchService:
         return first_message, messages
 
     # ── intent extraction helpers ──────────────────────────────────────────
+
+    @staticmethod
+    def _extract_location_update(message: str) -> str | None:
+        """Return the new zone if the message is a relocation announcement, else None."""
+        normalized = ProviderSearchService._normalize_message(message)
+        zone_raw: str | None = None
+        for prefix in LOCATION_UPDATE_PREFIXES:
+            if normalized.startswith(prefix):
+                zone_raw = normalized[len(prefix):]
+                break
+        if zone_raw is None:
+            return None
+        zone = ProviderSearchService._clean_zone_text(zone_raw)
+        if not zone:
+            return None
+        words = zone.split()
+        if len(words) > 6:
+            return None
+        # Bail out if the zone fragment itself starts a search
+        if any(zone.startswith(p) for p in SEARCH_PREFIXES):
+            return None
+        return zone
 
     @staticmethod
     def _is_search_start(
@@ -748,17 +824,147 @@ class ProviderSearchService:
         user_id: str,
         paso: str,
         rubro: str | None = None,
+        barrio: str | None = None,
+        ciudad: str | None = None,
         detalle: str | None = None,
+        pending_providers: list[dict[str, Any]] | None = None,
     ) -> None:
         """Persist the current guided-search step for the next turn."""
-        await state_repo.save(
-            user_id,
-            {
-                "estado": SEARCH_STATE_NAME,
-                "paso": paso,
-                "rubro": rubro,
-                "detalle": detalle,
+        payload: dict[str, Any] = {
+            "estado": SEARCH_STATE_NAME,
+            "paso": paso,
+            "rubro": rubro,
+            "barrio": barrio,
+            "ciudad": ciudad,
+            "detalle": detalle,
+        }
+        if pending_providers is not None:
+            payload["pending_providers"] = pending_providers
+        await state_repo.save(user_id, payload)
+
+    async def _handle_more_results_reply(
+        self,
+        *,
+        state_repo: EstadoRepository,
+        user_id: str,
+        message: str,
+        metadata: dict[str, Any] | None,
+        state: dict[str, Any],
+    ) -> AgentResponse | None:
+        """Serve the next provider page when the user confirms they want more."""
+        if self._is_more_results_no(message, metadata):
+            await state_repo.delete(user_id)
+            return AgentResponse(
+                intent=Intent.BUSCAR_SERVICIO,
+                message="Entiendo",
+                confidence=1.0,
+                entities={
+                    "rubro": state.get("rubro"),
+                    "barrio": state.get("barrio"),
+                    "ciudad": state.get("ciudad"),
+                    "detalle": state.get("detalle"),
+                },
+                requires_action=False,
+            )
+
+        if not self._is_more_results_yes(message, metadata):
+            return None
+
+        pending_raw = state.get("pending_providers")
+        pending_providers = [
+            provider for provider in pending_raw
+            if isinstance(provider, dict)
+        ] if isinstance(pending_raw, list) else []
+        if not pending_providers:
+            await state_repo.delete(user_id)
+            return AgentResponse(
+                intent=Intent.BUSCAR_SERVICIO,
+                message="Ya no tengo más opciones para mostrarte por ahora.",
+                confidence=1.0,
+                entities={
+                    "rubro": state.get("rubro"),
+                    "barrio": state.get("barrio"),
+                    "ciudad": state.get("ciudad"),
+                    "detalle": state.get("detalle"),
+                },
+                requires_action=False,
+            )
+
+        current_page = pending_providers[:PROVIDER_PAGE_SIZE]
+        remaining = pending_providers[PROVIDER_PAGE_SIZE:]
+        rubro = str(state.get("rubro") or "prestadores")
+        location = {
+            "barrio": state.get("barrio"),
+            "ciudad": state.get("ciudad"),
+        }
+        location_label = self._location_label(location) or "tu ubicación"
+        _, messages = ProviderSearchService._format_provider_results(
+            rubro,
+            location_label,
+            current_page,
+        )
+        if remaining:
+            await self._save_search_state(
+                state_repo,
+                user_id,
+                "awaiting_more_results",
+                rubro=state.get("rubro"),
+                barrio=state.get("barrio"),
+                ciudad=state.get("ciudad"),
+                detalle=state.get("detalle"),
+                pending_providers=remaining,
+            )
+            messages.append(self._build_more_results_message())
+        else:
+            await state_repo.delete(user_id)
+
+        return AgentResponse(
+            intent=Intent.BUSCAR_SERVICIO,
+            message=f"Te paso {len(current_page)} más de {rubro} en {location_label}:",
+            messages=messages,
+            confidence=1.0,
+            entities={
+                "rubro": state.get("rubro"),
+                "barrio": state.get("barrio"),
+                "ciudad": state.get("ciudad"),
+                "detalle": state.get("detalle"),
             },
+            requires_action=True,
+            metadata={"providers": current_page},
+        )
+
+    @staticmethod
+    def _is_more_results_yes(
+        message: str,
+        metadata: dict[str, Any] | None,
+    ) -> bool:
+        """Return True when the user accepts loading another provider page."""
+        if metadata and metadata.get("button_id") == SEARCH_MORE_YES_BUTTON_ID:
+            return True
+        return ProviderSearchService._normalize_message(message) in {"si", "sí"}
+
+    @staticmethod
+    def _is_more_results_no(
+        message: str,
+        metadata: dict[str, Any] | None,
+    ) -> bool:
+        """Return True when the user declines loading another provider page."""
+        if metadata and metadata.get("button_id") == SEARCH_MORE_NO_BUTTON_ID:
+            return True
+        return ProviderSearchService._normalize_message(message) == "no"
+
+    @staticmethod
+    def _build_more_results_message() -> Message:
+        """Create the SI/NO follow-up shown after the last provider card."""
+        return Message(
+            text="Queres que te busque mas?",
+            action=MessageAction(
+                type="reply_buttons",
+                buttons=[
+                    ReplyButton(id=SEARCH_MORE_YES_BUTTON_ID, title="SI"),
+                    ReplyButton(id=SEARCH_MORE_NO_BUTTON_ID, title="NO"),
+                ],
+            ),
         )
 
     async def _persist_search_location(
@@ -853,12 +1059,8 @@ class ProviderSearchService:
             )
             raw = resp.choices[0].message.content or "{}"
             data = json.loads(raw)
-            rubro = data.get("rubro") or None
+            rubro = resolve_canonical_rubro(data.get("rubro") or None)
             zona = data.get("zona") or None
-            # Validate rubro is in canonical list (case-insensitive)
-            if rubro:
-                canonical_lower = {r.lower(): r for r in CANONICAL_RUBROS}
-                rubro = canonical_lower.get(rubro.lower(), rubro)
             return rubro, zona
         except Exception:
             logger.exception("AI rubro extraction failed, falling back to regex")

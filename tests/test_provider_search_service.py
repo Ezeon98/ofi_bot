@@ -79,6 +79,39 @@ class ProviderSearchServiceFormattingTests(IsolatedAsyncioTestCase):
 class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
     """Validate guided-search shortcuts for direct provider requests."""
 
+    async def test_ai_extract_normalizes_non_canonical_air_trade(self) -> None:
+        """LLM rubros near the catalog should be remapped before searching."""
+        fake_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=(
+                            '{"rubro": "instalador de aire acondicionado", '
+                            '"zona": "Caballito"}'
+                        )
+                    )
+                )
+            ]
+        )
+        openai_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(return_value=fake_response)
+                )
+            )
+        )
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+            openai_client=openai_client,
+        )
+
+        rubro, zona = await service._ai_extract_rubro_and_zone(
+            "Quiero a alguien para instalar un aire en Caballito"
+        )
+
+        self.assertEqual(rubro, "Técnico en aire acondicionado")
+        self.assertEqual(zona, "Caballito")
+
     async def test_post_terms_button_starts_search_and_requests_trade_and_zone(self) -> None:
         """The onboarding search button should ask for specialty and zone."""
         service = ProviderSearchService(
@@ -273,6 +306,145 @@ class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
             )
 
         self.assertIsNone(response)
+
+    async def test_build_search_results_response_adds_more_prompt_when_pending_results_exist(self) -> None:
+        """The first page should include a SI/NO follow-up when more providers remain."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+        repo = SimpleNamespace(save=AsyncMock(), delete=AsyncMock())
+        providers = [
+            {"nombre": "Uno", "rubros": ["Electricista"], "barrio": "Caballito", "telefono": "1"},
+            {"nombre": "Dos", "rubros": ["Electricista"], "barrio": "Caballito", "telefono": "2"},
+            {"nombre": "Tres", "rubros": ["Electricista"], "barrio": "Caballito", "telefono": "3"},
+            {"nombre": "Cuatro", "rubros": ["Electricista"], "barrio": "Caballito", "telefono": "4"},
+        ]
+
+        with (
+            patch.object(provider_search_service, "EstadoRepository", return_value=repo),
+            patch.object(
+                provider_search_service,
+                "buscar_prestadores",
+                new=AsyncMock(return_value=providers),
+            ),
+            patch.object(
+                ProviderSearchService,
+                "_persist_search_location",
+                new=AsyncMock(),
+            ),
+        ):
+            response = await service._build_search_results_response(
+                turn_id="turn-more-1",
+                deps=SimpleNamespace(
+                    db=object(),
+                    user_id="5491112345678",
+                    usuario_id=71,
+                ),
+                memory_service=SimpleNamespace(),
+                rubro="electricista",
+                location={"barrio": "Caballito"},
+                detail=None,
+            )
+
+        self.assertEqual(
+            response.message,
+            "Encontramos 3 electricista que podrían ayudarte en Caballito:",
+        )
+        self.assertEqual(len(response.messages), 4)
+        self.assertEqual(response.messages[-1].text, "Queres que te busque mas?")
+        self.assertEqual(response.messages[-1].action.type, "reply_buttons")
+        self.assertEqual(
+            [button.title for button in response.messages[-1].action.buttons],
+            ["SI", "NO"],
+        )
+        repo.save.assert_awaited_once()
+        self.assertEqual(len(response.metadata["providers"]), 3)
+        self.assertEqual(response.metadata["providers"][0]["nombre"], "Uno")
+
+    async def test_more_results_yes_returns_next_page_without_repeats(self) -> None:
+        """Accepting the follow-up should emit the next three pending providers only."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+        repo = SimpleNamespace(
+            get=AsyncMock(
+                return_value={
+                    "estado": provider_search_service.SEARCH_STATE_NAME,
+                    "paso": "awaiting_more_results",
+                    "rubro": "electricista",
+                    "barrio": "Caballito",
+                    "pending_providers": [
+                        {"nombre": "Cuatro", "rubros": ["Electricista"], "barrio": "Caballito", "telefono": "4"},
+                        {"nombre": "Cinco", "rubros": ["Electricista"], "barrio": "Caballito", "telefono": "5"},
+                        {"nombre": "Seis", "rubros": ["Electricista"], "barrio": "Caballito", "telefono": "6"},
+                        {"nombre": "Siete", "rubros": ["Electricista"], "barrio": "Caballito", "telefono": "7"},
+                    ],
+                }
+            ),
+            save=AsyncMock(),
+            delete=AsyncMock(),
+        )
+
+        with patch.object(provider_search_service, "EstadoRepository", return_value=repo):
+            response = await service.maybe_handle_guided_search(
+                user_id="5491112345678",
+                message="SI",
+                metadata={
+                    "message_type": "interactive",
+                    "button_id": provider_search_service.SEARCH_MORE_YES_BUTTON_ID,
+                },
+                deps=SimpleNamespace(db=object()),
+                memory_service=SimpleNamespace(),
+                memories=[],
+                turn_id="turn-more-yes",
+            )
+
+        self.assertIsNotNone(response)
+        self.assertEqual(response.message, "Te paso 3 más de electricista en Caballito:")
+        self.assertEqual(len(response.messages), 4)
+        self.assertEqual(response.messages[0].text.splitlines()[0], "👤 Cuatro")
+        self.assertEqual(response.messages[1].text.splitlines()[0], "👤 Cinco")
+        self.assertEqual(response.messages[2].text.splitlines()[0], "👤 Seis")
+        self.assertEqual(response.messages[3].text, "Queres que te busque mas?")
+        repo.save.assert_awaited_once()
+        repo.delete.assert_not_awaited()
+
+    async def test_more_results_no_clears_state_and_confirms(self) -> None:
+        """Rejecting the follow-up should stop pagination and clear the state."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+        repo = SimpleNamespace(
+            get=AsyncMock(
+                return_value={
+                    "estado": provider_search_service.SEARCH_STATE_NAME,
+                    "paso": "awaiting_more_results",
+                    "rubro": "electricista",
+                    "barrio": "Caballito",
+                    "pending_providers": [{"nombre": "Cuatro"}],
+                }
+            ),
+            save=AsyncMock(),
+            delete=AsyncMock(),
+        )
+
+        with patch.object(provider_search_service, "EstadoRepository", return_value=repo):
+            response = await service.maybe_handle_guided_search(
+                user_id="5491112345678",
+                message="NO",
+                metadata={
+                    "message_type": "interactive",
+                    "button_id": provider_search_service.SEARCH_MORE_NO_BUTTON_ID,
+                },
+                deps=SimpleNamespace(db=object()),
+                memory_service=SimpleNamespace(),
+                memories=[],
+                turn_id="turn-more-no",
+            )
+
+        self.assertIsNotNone(response)
+        self.assertEqual(response.message, "Entiendo")
+        repo.delete.assert_awaited_once_with("5491112345678")
 
     async def test_awaiting_zone_strips_trade_prefix_from_location_reply(self) -> None:
         """A zone reply like 'electricista en caballito' should keep only the zone."""

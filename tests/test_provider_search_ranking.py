@@ -55,6 +55,18 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
         self.assertEqual(sanitized.barrio, "Caballito")
         self.assertIsNone(sanitized.ciudad)
 
+    def test_search_params_normalize_non_canonical_air_trade(self) -> None:
+        """Free-text air-conditioning rubros should map to the canonical trade."""
+        params = providers.BuscarPrestadoresInput(
+            rubro="instalador de aire acondicionado",
+            barrio="Caballito",
+            limit=3,
+        )
+
+        sanitized = providers._sanitize_search_params(params)
+
+        self.assertEqual(sanitized.rubro, "Técnico en aire acondicionado")
+
     async def test_rubro_search_uses_exact_trade_filters_only(self) -> None:
         """Searching should filter only against the provider rubros JSON field."""
         captured_sql: dict[str, str] = {}

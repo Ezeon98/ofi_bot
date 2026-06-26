@@ -24,6 +24,7 @@ from src.infrastructure.database.models import (
 )
 from src.utils.geocoding import geocode_text_location
 from src.utils.agent_logger import AgentLogger
+from src.utils.rubros import resolve_canonical_rubro
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class BuscarPrestadoresInput(BaseModel):
     lat: float | None = Field(default=None, description="Optional user latitude for ranking")
     lon: float | None = Field(default=None, description="Optional user longitude for ranking")
     solo_verificados: bool = Field(default=False)
-    limit: int = Field(default=3, ge=3, le=5)
+    limit: int = Field(default=3, ge=3, le=15)
     mensaje_contacto: str = Field(
         default="Hola, te contacto por ServiMatch para consultar sobre tus servicios.",
         description="Predefined message sent when the user taps 'Contactar'",
@@ -394,21 +395,29 @@ def _build_location_label(barrio: str | None, ciudad: str | None) -> str | None:
 def _sanitize_search_params(
     params: BuscarPrestadoresInput,
 ) -> BuscarPrestadoresInput:
-    """Normalize location fields so oficio text does not leak into barrio/ciudad."""
+    """Normalize rubro and location fields before hitting the provider query."""
+    rubro = resolve_canonical_rubro(params.rubro) or params.rubro
     barrio, ciudad = _sanitize_location_fields(
-        params.rubro,
+        rubro,
         params.barrio,
         params.ciudad,
     )
-    effective_limit = min(params.limit, 3)
+    effective_limit = min(params.limit, 15)
     if (
+        rubro == params.rubro
+        and
         barrio == params.barrio
         and ciudad == params.ciudad
         and effective_limit == params.limit
     ):
         return params
     return params.model_copy(
-        update={"barrio": barrio, "ciudad": ciudad, "limit": effective_limit}
+        update={
+            "rubro": rubro,
+            "barrio": barrio,
+            "ciudad": ciudad,
+            "limit": effective_limit,
+        }
     )
 
 

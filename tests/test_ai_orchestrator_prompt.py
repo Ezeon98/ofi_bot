@@ -7,7 +7,12 @@ from types import ModuleType, SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.agents.models.response import Intent, Message, MessageAction
+from src.agents.models.response import (
+    Intent,
+    Message,
+    MessageAction,
+    ReplyButton,
+)
 from src.agents.prompts.router import ROUTER_SYSTEM_PROMPT
 from src.memory.schemas import MemoryRead
 
@@ -220,7 +225,7 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             MemoryRead(
                 id=1,
                 user_id=71,
-                key="search_latitude",
+                key="latitude",
                 value="-34.6037",
                 importance=0.95,
                 created_at=now,
@@ -229,7 +234,7 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             MemoryRead(
                 id=2,
                 user_id=71,
-                key="search_longitude",
+                key="longitude",
                 value="-58.3816",
                 importance=0.95,
                 created_at=now,
@@ -440,6 +445,40 @@ class AIOrchestratorProviderFormattingTests(IsolatedAsyncioTestCase):
         self.assertIn("Sofia Tecnica", response.messages[1]["text"])
         self.assertEqual(response.messages[0]["action"]["label"], "Contactar")
         self.assertEqual(response.metadata["providers"][0]["nombre"], "Maria Electricista")
+
+    async def test_to_orchestrator_response_keeps_reply_buttons(self) -> None:
+        """Reply-button actions should survive serialization to the bot layer."""
+        response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.BUSCAR_SERVICIO,
+            message="Encontré opciones.",
+            messages=[
+                Message(
+                    text="Queres que te busque mas?",
+                    action=MessageAction(
+                        type="reply_buttons",
+                        buttons=[
+                            ReplyButton(id="provider_search_more_yes", title="SI"),
+                            ReplyButton(id="provider_search_more_no", title="NO"),
+                        ],
+                    ),
+                )
+            ],
+            confidence=1.0,
+        )
+
+        serialized = ai_orchestrator.AIOrchestrator._to_orchestrator_response(
+            response,
+            source="shortcut",
+        )
+
+        self.assertEqual(serialized.messages[0]["action"]["type"], "reply_buttons")
+        self.assertEqual(
+            serialized.messages[0]["action"]["buttons"],
+            [
+                {"id": "provider_search_more_yes", "title": "SI"},
+                {"id": "provider_search_more_no", "title": "NO"},
+            ],
+        )
 
     async def test_process_rebuilds_provider_cards_ignoring_duplicate_block_after_results(self) -> None:
         """A duplicate-blocked retry should not hide the previous valid provider list."""

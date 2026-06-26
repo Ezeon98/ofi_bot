@@ -8,7 +8,12 @@ from typing import Any
 
 from src.infrastructure.config import get_settings
 from src.infrastructure.container import UnitOfWork
-from src.infrastructure.external.whatsapp_client import enviar_mensaje, enviar_typing, enviar_boton_cta
+from src.infrastructure.external.whatsapp_client import (
+    enviar_boton_cta,
+    enviar_botones_respuesta,
+    enviar_mensaje,
+    enviar_typing,
+)
 from src.orchestrator.ai_orchestrator import AIOrchestrator
 from src.utils.agent_logger import AgentLogger
 
@@ -97,6 +102,12 @@ async def _send_additional_messages(
                 body_text=text,
                 display_text=action["label"],
                 url=action["url"],
+            )
+        elif action and action.get("type") == "reply_buttons":
+            await enviar_botones_respuesta(
+                sender,
+                body_text=text,
+                buttons=action.get("buttons") or [],
             )
         else:
             await enviar_mensaje(sender, text)

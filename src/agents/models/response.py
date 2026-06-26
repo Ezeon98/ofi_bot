@@ -11,6 +11,13 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class ReplyButton(BaseModel):
+    """Quick-reply button metadata for interactive follow-ups."""
+
+    id: str = Field(description="Stable button identifier")
+    title: str = Field(description="Button title shown to the user")
+
+
 class Intent(StrEnum):
     BUSCAR_SERVICIO = "buscar_servicio"
     REGISTRAR_PRESTADOR = "registrar_prestador"
@@ -27,9 +34,19 @@ class Intent(StrEnum):
 class MessageAction(BaseModel):
     """Action attached to a message (e.g. a CTA button)."""
 
-    type: str = Field(description="Action type: 'cta_url'")
-    label: str = Field(description="Button text, e.g. 'Contactar'")
-    url: str = Field(description="URL to open (e.g. https://wa.me/...)")
+    type: str = Field(description="Action type: 'cta_url' or 'reply_buttons'")
+    label: str | None = Field(
+        default=None,
+        description="Button text for CTA URL actions, e.g. 'Contactar'",
+    )
+    url: str | None = Field(
+        default=None,
+        description="URL to open for CTA URL actions",
+    )
+    buttons: list[ReplyButton] = Field(
+        default_factory=list,
+        description="Quick replies for interactive reply-buttons messages",
+    )
 
 
 class Message(BaseModel):
