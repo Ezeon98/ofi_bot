@@ -146,6 +146,42 @@ class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
         self.assertIn("qué zona", response.message)
         state_repo_patch.return_value.save.assert_awaited_once()
 
+    async def test_persist_search_location_clears_stale_barrio_for_city_only_update(self) -> None:
+        """Persisting only a city should delete an older stored barrio."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+        memory_service = SimpleNamespace(
+            upsert_memory=AsyncMock(),
+            delete_memory=AsyncMock(),
+        )
+
+        with patch.object(
+            provider_search_service,
+            "geocode_text_location",
+            new=AsyncMock(
+                return_value={
+                    "barrio": "Lanús",
+                    "ciudad": "Lanús",
+                    "lat": -34.699,
+                    "lon": -58.392,
+                }
+            ),
+        ):
+            await service.persist_search_location(
+                memory_service,
+                71,
+                {"ciudad": "Lanús"},
+            )
+
+        upserted_keys = [call.args[1] for call in memory_service.upsert_memory.await_args_list]
+        deleted_keys = [call.args[1] for call in memory_service.delete_memory.await_args_list]
+        self.assertIn("ciudad", upserted_keys)
+        self.assertIn("latitude", upserted_keys)
+        self.assertIn("longitude", upserted_keys)
+        self.assertNotIn("barrio", upserted_keys)
+        self.assertIn("barrio", deleted_keys)
+
     async def test_awaiting_need_can_use_trade_and_zone_from_same_reply(self) -> None:
         """A follow-up with both rubro and zone should skip the extra zone prompt."""
         service = ProviderSearchService(
@@ -195,6 +231,57 @@ class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["rubro"], "electricista")
         self.assertEqual(kwargs["location"], {"barrio": "caballito"})
 
+    async def test_awaiting_need_inline_zone_overrides_stored_location(self) -> None:
+        """An explicit zone reply should replace stale stored search memory."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+        expected = AgentResponse(
+            intent=Intent.BUSCAR_SERVICIO,
+            message="Encontré opciones cerca de lanus.",
+            confidence=1.0,
+            entities={"rubro": "electricista", "barrio": "lanus"},
+            requires_action=True,
+        )
+
+        with (
+            patch.object(
+                provider_search_service,
+                "EstadoRepository",
+                return_value=SimpleNamespace(
+                    get=AsyncMock(
+                        return_value={
+                            "estado": provider_search_service.SEARCH_STATE_NAME,
+                            "paso": "awaiting_need",
+                        }
+                    ),
+                    save=AsyncMock(),
+                    delete=AsyncMock(),
+                ),
+            ),
+            patch.object(
+                ProviderSearchService,
+                "_build_search_results_response",
+                new=AsyncMock(return_value=expected),
+            ) as build_response_mock,
+        ):
+            response = await service.maybe_handle_guided_search(
+                user_id="5491162527111",
+                message="Electricista en Lanus",
+                metadata={"message_type": "text"},
+                deps=SimpleNamespace(db=object()),
+                memory_service=SimpleNamespace(),
+                memories=[
+                    SimpleNamespace(key="search_location_barrio", value="Wilde"),
+                    SimpleNamespace(key="search_location_ciudad", value="Lanus"),
+                ],
+                turn_id="turn-awaiting-need-override",
+            )
+
+        self.assertIs(response, expected)
+        _, kwargs = build_response_mock.await_args
+        self.assertEqual(kwargs["location"], {"barrio": "lanus"})
+
     async def test_initial_search_uses_inline_zone_from_buscarme_message(self) -> None:
         """The first search message should reuse the typed zone and skip the agent path."""
         service = ProviderSearchService(
@@ -243,6 +330,61 @@ class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
         _, kwargs = build_response_mock.await_args
         self.assertEqual(kwargs["rubro"], "electricistas")
         self.assertEqual(kwargs["location"], {"barrio": "caballito"})
+
+    async def test_initial_search_inline_zone_overrides_stored_location(self) -> None:
+        """A fresh search should not keep an older stored barrio when a new zone is typed."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+        expected = AgentResponse(
+            intent=Intent.BUSCAR_SERVICIO,
+            message="Encontramos 2 electricistas que podrían ayudarte en lanus:",
+            messages=[
+                Message(text="👤 Maria Electricista"),
+                Message(text="👤 Sofia Tecnica"),
+            ],
+            confidence=1.0,
+            entities={"rubro": "electricistas", "barrio": "lanus"},
+            requires_action=True,
+        )
+
+        with (
+            patch.object(
+                provider_search_service,
+                "EstadoRepository",
+                return_value=SimpleNamespace(
+                    get=AsyncMock(return_value={}),
+                    save=AsyncMock(),
+                    delete=AsyncMock(),
+                ),
+            ),
+            patch.object(
+                ProviderSearchService,
+                "_build_search_results_response",
+                new=AsyncMock(return_value=expected),
+            ) as build_response_mock,
+            patch.object(
+                ProviderSearchService,
+                "_ai_extract_rubro_and_zone",
+                new=AsyncMock(return_value=("electricistas", "lanus")),
+            ),
+        ):
+            response = await service.maybe_handle_guided_search(
+                user_id="5491162527111",
+                message="Busco electricistas en Lanus",
+                metadata={"message_type": "text"},
+                deps=SimpleNamespace(db=object()),
+                memory_service=SimpleNamespace(),
+                memories=[
+                    SimpleNamespace(key="search_location_barrio", value="Wilde"),
+                    SimpleNamespace(key="search_location_ciudad", value="Lanus"),
+                ],
+                turn_id="turn-fresh-override",
+            )
+
+        self.assertIs(response, expected)
+        _, kwargs = build_response_mock.await_args
+        self.assertEqual(kwargs["location"], {"barrio": "lanus"})
 
     async def test_problem_statement_with_shared_location_defers_to_agent(self) -> None:
         """Narrative problems should bypass the shortcut so the agent can infer the rubro."""

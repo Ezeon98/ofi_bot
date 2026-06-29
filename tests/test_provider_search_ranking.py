@@ -29,18 +29,18 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(pattern, '%"Niñera"%')
 
-    def test_search_params_clamp_limit_to_three(self) -> None:
-        """Searches should never return more than three provider cards."""
+    def test_search_params_clamp_limit_to_fetch_window(self) -> None:
+        """Searches may fetch extra providers for paginated result cards."""
         params = providers.BuscarPrestadoresInput(
             rubro="plomero",
             barrio="Castelar",
             ciudad="Castelar",
-            limit=5,
+            limit=15,
         )
 
         sanitized = providers._sanitize_search_params(params)
 
-        self.assertEqual(sanitized.limit, 3)
+        self.assertEqual(sanitized.limit, 15)
 
     def test_search_params_strip_trade_text_from_barrio(self) -> None:
         """Barrio inputs contaminated with the rubro should keep only the zone."""
@@ -66,6 +66,22 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
         sanitized = providers._sanitize_search_params(params)
 
         self.assertEqual(sanitized.rubro, "Técnico en aire acondicionado")
+
+    def test_search_report_exposes_related_rubro_suggestions(self) -> None:
+        """The AI should receive close trade alternatives in the search report."""
+        report = providers.build_provider_search_report(
+            providers.BuscarPrestadoresInput(
+                rubro="Electricista industrial",
+                barrio="Lanús",
+                limit=3,
+            ),
+            [],
+        )
+
+        self.assertEqual(report["status"], "no_results")
+        self.assertEqual(report["resolved_rubro"], "Electricista industrial")
+        self.assertIn("Electricista domiciliario", report["related_rubros"])
+        self.assertNotIn("Electricista industrial", report["related_rubros"])
 
     async def test_rubro_search_uses_exact_trade_filters_only(self) -> None:
         """Searching should filter only against the provider rubros JSON field."""
@@ -95,6 +111,41 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
         self.assertNotIn("trades", sql.lower())
         self.assertNotIn("%n%", sql)
         self.assertNotIn("%ninera%", sql)
+
+    async def test_search_attempt_does_not_mix_related_rubros_implicitly(self) -> None:
+        """Each search attempt should query only one exact rubro for the AI."""
+        captured_sql: dict[str, str] = {}
+
+        async def execute_side_effect(stmt):
+            captured_sql["sql"] = str(
+                stmt.compile(compile_kwargs={"literal_binds": True})
+            )
+            return []
+
+        fake_db = SimpleNamespace(execute=AsyncMock(side_effect=execute_side_effect))
+        ctx = SimpleNamespace(
+            deps=SimpleNamespace(
+                db=fake_db,
+                current_message_metadata={"latitude": -34.7, "longitude": -58.39},
+            )
+        )
+
+        await providers.buscar_prestadores(
+            ctx,
+            providers.BuscarPrestadoresInput(
+                rubro="Electricista industrial",
+                barrio="Lanús",
+                limit=3,
+            ),
+        )
+
+        sql = captured_sql["sql"]
+        self.assertIn(
+            'providers.rubros LIKE \'%"Electricista industrial"%\'',
+            sql,
+        )
+        self.assertNotIn("Electricista domiciliario", sql)
+        self.assertNotIn("Instalación de luminarias", sql)
 
     async def test_busqueda_uses_message_metadata_for_distance_ranking(self) -> None:
         """Metadata coordinates should be enough to compute and expose result distances."""

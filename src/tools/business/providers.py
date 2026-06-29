@@ -24,7 +24,7 @@ from src.infrastructure.database.models import (
 )
 from src.utils.geocoding import geocode_text_location
 from src.utils.agent_logger import AgentLogger
-from src.utils.rubros import resolve_canonical_rubro
+from src.utils.rubros import related_canonical_rubros, resolve_canonical_rubro
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,17 @@ class BuscarPrestadoresInput(BaseModel):
     mensaje_contacto: str = Field(
         default="Hola, te contacto por ServiMatch para consultar sobre tus servicios.",
         description="Predefined message sent when the user taps 'Contactar'",
+    )
+
+
+class RubrosRelacionadosInput(BaseModel):
+    rubro: str = Field(description="Canonical or near-canonical requested trade")
+    limit: int = Field(default=4, ge=1, le=6)
+
+
+class ResolverUbicacionInput(BaseModel):
+    ubicacion: str = Field(
+        description="Neighborhood, locality or city extracted from the user's current message"
     )
 
 
@@ -145,16 +156,18 @@ async def buscar_prestadores(
             if location_filters:
                 stmt = stmt.where(or_(*location_filters))
 
-        if effective_params.rubro:
+        rubro_filters = _search_rubros_for(effective_params.rubro)
+        if rubro_filters:
             logger.info(
-                "PROVIDER_RUBRO user=%s rubro=%r rubro_pattern=%r",
+                "PROVIDER_RUBRO user=%s rubro=%r rubro_pattern=%r related=%r",
                 user_id,
                 effective_params.rubro,
                 _legacy_rubro_json_pattern(effective_params.rubro),
+                _related_rubro_suggestions(effective_params.rubro),
             )
             stmt = stmt.where(
                 ProviderModel.rubros.like(
-                    _legacy_rubro_json_pattern(effective_params.rubro)
+                    _legacy_rubro_json_pattern(rubro_filters[0])
                 )
             )
 
@@ -320,6 +333,78 @@ async def consultar_prestador(
     }
 
 
+async def buscar_rubros_relacionados(
+    _ctx: RunContext[AgentDependencies],
+    params: RubrosRelacionadosInput,
+) -> dict[str, Any]:
+    """Return nearby canonical rubros so the AI can broaden a sparse search."""
+    canonical = resolve_canonical_rubro(params.rubro) or params.rubro
+    return {
+        "rubro": canonical,
+        "alternativas": _related_rubro_suggestions(canonical, limit=params.limit),
+    }
+
+
+async def resolver_ubicacion(
+    _ctx: RunContext[AgentDependencies],
+    params: ResolverUbicacionInput,
+) -> dict[str, Any]:
+    """Resolve a textual zone into normalized city/neighborhood fields."""
+    query = re.sub(r"\s+", " ", params.ubicacion.strip())
+    if not query:
+        return {
+            "resolved": False,
+            "query": params.ubicacion,
+            "barrio": None,
+            "ciudad": None,
+            "lat": None,
+            "lon": None,
+            "display_name": None,
+        }
+
+    geocoded = await geocode_text_location(query)
+    return {
+        "resolved": bool(geocoded),
+        "query": query,
+        "barrio": geocoded.get("barrio"),
+        "ciudad": geocoded.get("ciudad"),
+        "lat": geocoded.get("lat"),
+        "lon": geocoded.get("lon"),
+        "display_name": geocoded.get("display_name"),
+    }
+
+
+def build_provider_search_report(
+    params: BuscarPrestadoresInput,
+    providers: list[dict[str, Any]],
+    *,
+    status: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    """Return the structured search report consumed by the router agent."""
+    effective_params = _sanitize_search_params(params)
+    related_rubros = _related_rubro_suggestions(effective_params.rubro)
+    provider_count = len(providers)
+    effective_status = status or ("ok" if provider_count else "no_results")
+    return {
+        "status": effective_status,
+        "message": message,
+        "requested_rubro": params.rubro,
+        "resolved_rubro": effective_params.rubro,
+        "related_rubros": related_rubros,
+        "location": {
+            "barrio": effective_params.barrio,
+            "ciudad": effective_params.ciudad,
+            "lat": effective_params.lat,
+            "lon": effective_params.lon,
+        },
+        "provider_count": provider_count,
+        "requested_limit": effective_params.limit,
+        "sufficient_results": provider_count >= effective_params.limit,
+        "providers": providers,
+    }
+
+
 async def _resolve_usuario_id(db: Any, raw_user_id: str) -> int | None:
     """Resolve the DB user id from the bot user identifier.
 
@@ -348,6 +433,24 @@ def _parse_rubros_json(rubros_json: str | None) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [str(item) for item in raw if isinstance(item, str) and item]
+
+
+def _search_rubros_for(rubro: str | None) -> list[str]:
+    """Build the exact rubro filter used for a single search attempt."""
+    canonical = resolve_canonical_rubro(rubro) or rubro
+    return [canonical] if canonical else []
+
+
+def _related_rubro_suggestions(rubro: str | None, limit: int = 4) -> list[str]:
+    """Return only alternative rubros, excluding the requested primary one."""
+    canonical = resolve_canonical_rubro(rubro) or rubro
+    if not canonical:
+        return []
+    return [
+        item
+        for item in related_canonical_rubros(canonical, limit=limit + 1)
+        if item != canonical
+    ][:limit]
 
 
 async def _resolve_search_origin(

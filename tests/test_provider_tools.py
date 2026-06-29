@@ -7,7 +7,7 @@ from importlib import import_module
 from types import ModuleType
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 
 def _load_provider_tools_module():
@@ -59,3 +59,42 @@ class ProviderToolsTests(IsolatedAsyncioTestCase):
         self.assertIsNotNone(db.added)
         self.assertEqual(db.added.usuario_id, 42)
         self.assertEqual(db.added.nombre, "Juan Perez")
+
+    async def test_busqueda_rubros_relacionados_devuelve_alternativas(self) -> None:
+        """The AI helper should expose close canonical rubro alternatives."""
+        result = await provider_tools.buscar_rubros_relacionados(
+            SimpleNamespace(),
+            provider_tools.RubrosRelacionadosInput(
+                rubro="Electricista industrial",
+                limit=4,
+            ),
+        )
+
+        self.assertEqual(result["rubro"], "Electricista industrial")
+        self.assertIn("Electricista domiciliario", result["alternativas"])
+        self.assertNotIn("Electricista industrial", result["alternativas"])
+
+    async def test_resolver_ubicacion_devuelve_geocoding_estructurado(self) -> None:
+        """The AI helper should normalize a textual zone into location fields."""
+        with patch.object(
+            provider_tools,
+            "geocode_text_location",
+            new=AsyncMock(
+                return_value={
+                    "barrio": None,
+                    "ciudad": "Lanús",
+                    "lat": -34.699,
+                    "lon": -58.392,
+                    "display_name": "Lanús, Buenos Aires, Argentina",
+                }
+            ),
+        ) as geocode_mock:
+            result = await provider_tools.resolver_ubicacion(
+                SimpleNamespace(),
+                provider_tools.ResolverUbicacionInput(ubicacion="Lanus"),
+            )
+
+        geocode_mock.assert_awaited_once_with("Lanus")
+        self.assertTrue(result["resolved"])
+        self.assertEqual(result["ciudad"], "Lanús")
+        self.assertEqual(result["query"], "Lanus")

@@ -241,8 +241,16 @@ class ProviderSearchService:
             if rubro is None:
                 self._log(turn_id, "guided_search.awaiting_need.no_match", message_preview=message[:80])
                 return None
+            inline_zone = ai_zone or self._extract_inline_zone(message)
+            if current_location is None and inline_zone is not None:
+                search_location = {"barrio": inline_zone}
+                self._log(
+                    turn_id,
+                    "guided_search.awaiting_need.inline_zone_override",
+                    rubro=rubro,
+                    typed_zone=inline_zone,
+                )
             if search_location is None:
-                inline_zone = ai_zone or self._extract_inline_zone(message)
                 if inline_zone is not None:
                     search_location = {"barrio": inline_zone}
                     self._log(
@@ -351,6 +359,16 @@ class ProviderSearchService:
                 self._log(turn_id, "guided_search.fresh.need_zone", rubro=rubro)
                 await self._save_search_state(state_repo, user_id, "awaiting_zone", rubro)
                 return self._build_location_request_response(rubro)
+        else:
+            inline_zone = ai_zone or self._extract_inline_zone(message)
+            if current_location is None and inline_zone is not None:
+                search_location = {"barrio": inline_zone}
+                self._log(
+                    turn_id,
+                    "guided_search.fresh.inline_zone_override",
+                    rubro=rubro,
+                    typed_zone=inline_zone,
+                )
 
         self._log(turn_id, "guided_search.fresh.search_ready", rubro=rubro, location=self._location_label(search_location))
         return await self._build_search_results_response(
@@ -405,26 +423,41 @@ class ProviderSearchService:
     def extract_provider_results_from_run_messages(
         run_messages: list[Any],
     ) -> list[dict[str, Any]] | None:
-        """Recover raw provider results from the latest tool return in a model run."""
-        for message in reversed(run_messages):
+        """Recover and merge provider results from all tool returns in a model run."""
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for message in run_messages:
             parts = getattr(message, "parts", None)
             if not parts:
                 continue
 
-            for part in reversed(parts):
+            for part in parts:
                 if getattr(part, "part_kind", None) != "tool-return":
                     continue
                 if getattr(part, "tool_name", None) != "tool_buscar_prestadores":
                     continue
 
                 content = getattr(part, "content", None)
+                if isinstance(content, dict):
+                    content = content.get("providers")
                 if not isinstance(content, list) or not content:
                     continue
                 if not all(isinstance(item, dict) for item in content):
                     continue
-                return content
 
-        return None
+                for provider in content:
+                    provider_key = str(
+                        provider.get("telefono")
+                        or provider.get("nombre")
+                        or provider
+                    )
+                    if provider_key in seen:
+                        continue
+                    seen.add(provider_key)
+                    merged.append(provider)
+
+        return merged or None
 
     async def store_search_location_if_available(
         self,
@@ -438,7 +471,7 @@ class ProviderSearchService:
         location = self._location_from_metadata(metadata)
         if location is None:
             return
-        await self._persist_search_location(memory_service, user_id, location)
+        await self.persist_search_location(memory_service, user_id, location)
 
     async def persist_search_location(
         self,
@@ -452,7 +485,8 @@ class ProviderSearchService:
         Used by the AIOrchestrator's LLM agent path to persist entities
         extracted by the agent (e.g. barrio, ciudad) into long-term memory.
         """
-        await self._persist_search_location(memory_service, user_id, location)
+        normalized_location = await self._enrich_location_for_memory(dict(location))
+        await self._persist_search_location(memory_service, user_id, normalized_location)
 
     # ── search execution ───────────────────────────────────────────────────
 
@@ -995,12 +1029,29 @@ class ProviderSearchService:
                 str(lon),
                 0.95,
             )
+        else:
+            await self._delete_memory_if_supported(
+                memory_service,
+                user_id,
+                LOCATION_MEMORY_KEYS["lat"],
+            )
+            await self._delete_memory_if_supported(
+                memory_service,
+                user_id,
+                LOCATION_MEMORY_KEYS["lon"],
+            )
         if ciudad:
             await memory_service.upsert_memory(
                 user_id,
                 LOCATION_MEMORY_KEYS["ciudad"],
                 ciudad,
                 0.8,
+            )
+        else:
+            await self._delete_memory_if_supported(
+                memory_service,
+                user_id,
+                LOCATION_MEMORY_KEYS["ciudad"],
             )
         if barrio:
             await memory_service.upsert_memory(
@@ -1009,6 +1060,54 @@ class ProviderSearchService:
                 barrio,
                 0.8,
             )
+        else:
+            await self._delete_memory_if_supported(
+                memory_service,
+                user_id,
+                LOCATION_MEMORY_KEYS["barrio"],
+            )
+
+    async def _enrich_location_for_memory(
+        self,
+        location: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Normalize persisted search location without inventing a new barrio."""
+        if location.get("lat") is not None and location.get("lon") is not None:
+            return location
+
+        location_label = ProviderSearchService._location_label(location)
+        if not location_label:
+            return location
+
+        geocoded = await geocode_text_location(location_label)
+        latitude = geocoded.get("lat")
+        longitude = geocoded.get("lon")
+        if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
+            location["lat"] = float(latitude)
+            location["lon"] = float(longitude)
+
+        if not location.get("ciudad") and geocoded.get("ciudad"):
+            location["ciudad"] = geocoded["ciudad"]
+
+        if (
+            not location.get("barrio")
+            and not location.get("ciudad")
+            and geocoded.get("barrio")
+        ):
+            location["barrio"] = geocoded["barrio"]
+
+        return location
+
+    @staticmethod
+    async def _delete_memory_if_supported(
+        memory_service: MemoryService,
+        user_id: int,
+        key: str,
+    ) -> None:
+        """Delete a memory key when the service implementation exposes it."""
+        delete_memory = getattr(memory_service, "delete_memory", None)
+        if callable(delete_memory):
+            await delete_memory(user_id, key)
 
     # ── utilities ──────────────────────────────────────────────────────────
 

@@ -81,6 +81,11 @@ class MemoryService:
                 MemoryUpsert(key=key, value=value, importance=importance),
             )
 
+    async def delete_memory(self, user_id: int, key: str) -> None:
+        """Delete a single memory key for the user when it becomes stale."""
+        async with self._db_lock:
+            await self._memories.delete_by_key(user_id, key)
+
     async def process_interaction(
         self,
         user_id: int,

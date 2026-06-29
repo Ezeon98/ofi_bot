@@ -67,6 +67,13 @@ def test_router_prompt_requires_inference_from_problem_descriptions() -> None:
     assert '"en mi casa"' in ROUTER_SYSTEM_PROMPT
 
 
+def test_router_prompt_mentions_related_rubros_and_location_resolution_tools() -> None:
+    """The agent prompt should expose the AI-owned search broadening workflow."""
+    assert "tool_rubros_relacionados" in ROUTER_SYSTEM_PROMPT
+    assert "tool_resolver_ubicacion" in ROUTER_SYSTEM_PROMPT
+    assert "menos de 3 resultados" in ROUTER_SYSTEM_PROMPT
+
+
 class AIOrchestratorFailureTests(IsolatedAsyncioTestCase):
     """Validate error handling around agent execution and persistence."""
 
@@ -133,8 +140,8 @@ class AIOrchestratorFailureTests(IsolatedAsyncioTestCase):
         memory_service.process_interaction.assert_not_awaited()
 
 
-class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
-    """Validate the deterministic guided search path for service requests."""
+class AIOrchestratorAgentSearchTests(IsolatedAsyncioTestCase):
+    """Validate that service searches are now owned by the router agent."""
 
     def _settings(self) -> SimpleNamespace:
         """Build test settings with AI memory enabled."""
@@ -161,11 +168,10 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             upsert_memory=AsyncMock(),
         )
 
-    async def test_process_requests_location_before_running_agent(self) -> None:
-        """A direct service request without a saved location should ask for one."""
+    async def test_process_requests_location_via_agent(self) -> None:
+        """A direct service request without a saved location should be answered by the agent."""
         memory_service = self._memory_service()
         db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
-        router_run = AsyncMock()
         guided_response = ai_orchestrator.AgentResponse(
             intent=ai_orchestrator.Intent.BUSCAR_SERVICIO,
             message=(
@@ -176,6 +182,14 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             entities={"rubro": "plomero"},
             requires_action=False,
         )
+        router_run = AsyncMock(
+            return_value=SimpleNamespace(
+                output=guided_response,
+                new_messages=lambda: [],
+            )
+        )
+        guided_search_mock = AsyncMock(return_value=None)
+        location_update_mock = AsyncMock(return_value=None)
 
         with (
             patch.object(ai_orchestrator, "AsyncOpenAI", return_value=object()),
@@ -202,7 +216,12 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             patch.object(
                 ai_orchestrator.ProviderSearchService,
                 "maybe_handle_guided_search",
-                new=AsyncMock(return_value=guided_response),
+                new=guided_search_mock,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_handle_location_update",
+                new=location_update_mock,
             ),
         ):
             orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
@@ -214,12 +233,14 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.intent, Intent.BUSCAR_SERVICIO.value)
-        self.assertEqual(response.source, "shortcut")
+        self.assertEqual(response.source, "llm")
         self.assertIn("compartime tu ubicación", response.message)
-        router_run.assert_not_awaited()
+        router_run.assert_awaited_once()
+        guided_search_mock.assert_not_awaited()
+        location_update_mock.assert_not_awaited()
 
-    async def test_process_uses_saved_location_and_returns_results(self) -> None:
-        """A saved location should be enough to search providers without the agent."""
+    async def test_process_uses_agent_results_when_location_exists(self) -> None:
+        """Saved location still feeds context, but the agent owns the response."""
         now = datetime.now(UTC)
         memories = [
             MemoryRead(
@@ -243,7 +264,6 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
         ]
         memory_service = self._memory_service(memories)
         db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
-        router_run = AsyncMock()
         provider_response = ai_orchestrator.AgentResponse(
             intent=ai_orchestrator.Intent.BUSCAR_SERVICIO,
             message="Encontré 1 plomero cerca de Caballito, CABA:",
@@ -269,6 +289,13 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
                 }
             ]},
         )
+        router_run = AsyncMock(
+            return_value=SimpleNamespace(
+                output=provider_response,
+                new_messages=lambda: [],
+            )
+        )
+        guided_search_mock = AsyncMock(return_value=None)
 
         with (
             patch.object(ai_orchestrator, "AsyncOpenAI", return_value=object()),
@@ -295,7 +322,7 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             patch.object(
                 ai_orchestrator.ProviderSearchService,
                 "maybe_handle_guided_search",
-                new=AsyncMock(return_value=provider_response),
+                new=guided_search_mock,
             ),
         ):
             orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
@@ -307,12 +334,16 @@ class AIOrchestratorSearchShortcutTests(IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.intent, Intent.BUSCAR_SERVICIO.value)
-        self.assertEqual(response.source, "shortcut")
-        self.assertEqual(response.message, "Encontré 1 plomero cerca de Caballito, CABA:")
+        self.assertEqual(response.source, "llm")
+        self.assertEqual(
+            response.message,
+            "Encontramos 1 plomero que podrían ayudarte en Caballito:",
+        )
         self.assertEqual(len(response.messages), 1)
         self.assertIn("Plomero Centro", response.messages[0]["text"])
-        self.assertIn("2.1 km", response.messages[0]["text"])
-        router_run.assert_not_awaited()
+        self.assertEqual(response.messages[0]["action"]["label"], "Contactar")
+        router_run.assert_awaited_once()
+        guided_search_mock.assert_not_awaited()
 
 
 class AIOrchestratorProviderFormattingTests(IsolatedAsyncioTestCase):
@@ -445,6 +476,132 @@ class AIOrchestratorProviderFormattingTests(IsolatedAsyncioTestCase):
         self.assertIn("Sofia Tecnica", response.messages[1]["text"])
         self.assertEqual(response.messages[0]["action"]["label"], "Contactar")
         self.assertEqual(response.metadata["providers"][0]["nombre"], "Maria Electricista")
+
+    async def test_process_merges_multiple_search_reports_into_one_provider_list(self) -> None:
+        """Multiple related-rubro searches should merge into one outbound card list."""
+        memory_service = self._memory_service()
+        db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+        collapsed_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.BUSCAR_SERVICIO,
+            message="Encontré opciones para electricista en Lanús.",
+            confidence=1.0,
+            entities={"rubro": "electricista", "ciudad": "Lanús"},
+            requires_action=True,
+        )
+        tool_messages = [
+            SimpleNamespace(
+                parts=[
+                    SimpleNamespace(
+                        part_kind="tool-return",
+                        tool_name="tool_buscar_prestadores",
+                        content={
+                            "status": "no_results",
+                            "providers": [],
+                            "provider_count": 0,
+                            "related_rubros": ["Electricista domiciliario"],
+                        },
+                    ),
+                    SimpleNamespace(
+                        part_kind="tool-return",
+                        tool_name="tool_buscar_prestadores",
+                        content={
+                            "status": "ok",
+                            "providers": [
+                                {
+                                    "nombre": "Maria Electricista",
+                                    "rubros": ["Electricista domiciliario"],
+                                    "badge_verificado": True,
+                                    "barrio": "Lanús Oeste",
+                                    "ciudad": "Lanús",
+                                    "telefono": "5491131046599",
+                                },
+                                {
+                                    "nombre": "Sofia Tecnica",
+                                    "rubros": ["Instalación de luminarias"],
+                                    "badge_verificado": False,
+                                    "barrio": "Lanús Este",
+                                    "ciudad": "Lanús",
+                                    "telefono": "5491100001006",
+                                },
+                            ],
+                            "provider_count": 2,
+                            "related_rubros": [],
+                        },
+                    ),
+                    SimpleNamespace(
+                        part_kind="tool-return",
+                        tool_name="tool_buscar_prestadores",
+                        content={
+                            "status": "ok",
+                            "providers": [
+                                {
+                                    "nombre": "Maria Electricista",
+                                    "rubros": ["Electricista domiciliario"],
+                                    "badge_verificado": True,
+                                    "barrio": "Lanús Oeste",
+                                    "ciudad": "Lanús",
+                                    "telefono": "5491131046599",
+                                },
+                                {
+                                    "nombre": "Lucas Porteros",
+                                    "rubros": ["Porteros eléctricos"],
+                                    "badge_verificado": True,
+                                    "barrio": "Remedios de Escalada",
+                                    "ciudad": "Lanús",
+                                    "telefono": "5491100001010",
+                                },
+                            ],
+                            "provider_count": 2,
+                            "related_rubros": [],
+                        },
+                    ),
+                ]
+            )
+        ]
+        router_run = AsyncMock(
+            return_value=SimpleNamespace(
+                output=collapsed_response,
+                new_messages=lambda: tool_messages,
+            )
+        )
+
+        with (
+            patch.object(ai_orchestrator, "AsyncOpenAI", return_value=object()),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_memory_service",
+                return_value=memory_service,
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                ai_orchestrator,
+                "router_agent",
+                new=SimpleNamespace(run=router_run),
+            ),
+        ):
+            orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
+            response = await orchestrator.process(
+                user_id="5491112345678",
+                message="Necesito un electricista en Lanús",
+                db=db,
+                metadata={"message_type": "text"},
+            )
+
+        self.assertEqual(response.intent, Intent.BUSCAR_SERVICIO.value)
+        self.assertEqual(len(response.messages), 3)
+        self.assertIn("Maria Electricista", response.messages[0]["text"])
+        self.assertIn("Sofia Tecnica", response.messages[1]["text"])
+        self.assertIn("Lucas Porteros", response.messages[2]["text"])
+        self.assertEqual(len(response.metadata["providers"]), 3)
 
     async def test_to_orchestrator_response_keeps_reply_buttons(self) -> None:
         """Reply-button actions should survive serialization to the bot layer."""

@@ -25,10 +25,15 @@ from src.agents.models.response import AgentResponse
 from src.agents.prompts.router import ROUTER_SYSTEM_PROMPT
 from src.tools.business.providers import (
     BuscarPrestadoresInput,
+    RubrosRelacionadosInput,
+    ResolverUbicacionInput,
     CrearPrestadorInput,
     ActualizarPrestadorInput,
     ConsultarPrestadorInput,
     buscar_prestadores,
+    buscar_rubros_relacionados,
+    resolver_ubicacion,
+    build_provider_search_report,
     crear_prestador,
     actualizar_prestador,
     consultar_prestador,
@@ -118,18 +123,21 @@ router_agent: Agent[AgentDependencies, AgentResponse] = Agent(
 async def tool_buscar_prestadores(
     ctx: RunContext[AgentDependencies],
     params: BuscarPrestadoresInput,
-) -> list[dict] | dict:
+) -> dict:
     """Find service providers matching a rubro and optional location.
 
-    NOTE for the LLM: If this tool returns a dict with "info": "duplicate_call_blocked",
-    it means you already called this exact same search and got 0 results. STOP calling
-    it again and instead inform the user about the lack of results.
-    If it returns an empty list [], there were no providers found.
-    If returns a non-empty list, those are the results.
+    Returns a structured report with `provider_count`, `providers`, `related_rubros`
+    and `sufficient_results` so the LLM can decide whether to ask for missing
+    info, broaden the rubro, or respond with the current shortlist.
     """
     blocked = _is_repeat_call("tool_buscar_prestadores", params)
     if blocked is not None:
-        return blocked
+        return build_provider_search_report(
+            params,
+            [],
+            status="duplicate_call_blocked",
+            message=blocked["message"],
+        )
 
     providers = await buscar_prestadores(ctx, params)
     if not providers:
@@ -138,7 +146,25 @@ async def tool_buscar_prestadores(
             "rubro=%r barrio=%r ciudad=%r lat=%r lon=%r",
             params.rubro, params.barrio, params.ciudad, params.lat, params.lon,
         )
-    return providers
+    return build_provider_search_report(params, providers)
+
+
+@router_agent.tool
+async def tool_rubros_relacionados(
+    ctx: RunContext[AgentDependencies],
+    params: RubrosRelacionadosInput,
+) -> dict:
+    """Return close canonical trade alternatives for a search broadening step."""
+    return await buscar_rubros_relacionados(ctx, params)
+
+
+@router_agent.tool
+async def tool_resolver_ubicacion(
+    ctx: RunContext[AgentDependencies],
+    params: ResolverUbicacionInput,
+) -> dict:
+    """Normalize a user-mentioned zone into barrio/ciudad and optional coords."""
+    return await resolver_ubicacion(ctx, params)
 
 
 @router_agent.tool
