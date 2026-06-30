@@ -227,13 +227,22 @@ class AIOrchestrator:
                 active_mode=mode_state.get("active_mode"),
             )
 
-            confirmation_response = await self._maybe_handle_mode_confirmation(
+            confirmation_response, replay_request = await self._maybe_handle_mode_confirmation(
                 state_repo=state_repo,
                 user_id=user_id,
                 message=message,
+                metadata=metadata,
                 mode_state=mode_state,
                 requested_mode=mode_resolution["requested_mode"],
             )
+            if replay_request is not None:
+                await db.commit()
+                return await self.process(
+                    user_id=user_id,
+                    message=replay_request["message"],
+                    db=db,
+                    metadata=replay_request.get("metadata"),
+                )
             if confirmation_response is not None:
                 await db.commit()
                 return self._to_orchestrator_response(
@@ -390,44 +399,14 @@ class AIOrchestrator:
 
         # ── 5. Run agent ──────────────────────────────────────────────────
         system_context = context.to_system_context()
-        prompt_metadata = dict(metadata or {})
-        if effective_mode is not None:
-            prompt_metadata["active_mode"] = effective_mode
-        llm_agent, agent_name = self._select_llm_agent(effective_mode)
-        prompt_metadata["agent_name"] = agent_name
-        deps.current_message_metadata = prompt_metadata
-        user_prompt = self._build_user_prompt(message, system_context, prompt_metadata)
-
-        self._alog.info(
-            turn_id,
-            "agent.run",
-            agent_name=agent_name,
-            active_mode=effective_mode,
-            model=self._settings.openai_model,
-            user_prompt_length=len(user_prompt),
-            user_prompt_preview=user_prompt[:300],
-        )
-
         try:
-            result = await llm_agent.run(
-                user_prompt,
+            agent_response, tool_providers = await self._run_llm_agent(
+                turn_id=turn_id,
+                message=message,
+                system_context=system_context,
+                metadata=metadata,
                 deps=deps,
-                model=f"openai-chat:{self._settings.openai_model}",
-            )
-            agent_response: AgentResponse = result.output
-            tool_providers = self._provider_search.extract_provider_results_from_run_messages(
-                result.new_messages()
-            )
-            self._alog.info(
-                turn_id,
-                "agent.result",
-                agent_name=agent_name,
-                intent=agent_response.intent.value,
-                confidence=agent_response.confidence,
-                requires_action=agent_response.requires_action,
-                entities=agent_response.entities,
-                response_preview=agent_response.message[:200],
-                elapsed_ms=(time.monotonic() - _start) * 1000,
+                active_mode=effective_mode,
             )
         except Exception as exc:
             logger.exception("Agent run failed for user %s: %s", user_id, exc)
@@ -665,6 +644,97 @@ class AIOrchestrator:
         return "\n\n---\n".join(sections)
 
     @staticmethod
+    def _extract_mode_handoff(
+        metadata: dict[str, Any] | None,
+        *,
+        current_mode: str | None,
+    ) -> str | None:
+        """Read a tool-requested mode switch from the current agent run."""
+        if not metadata or not metadata.get("requested_mode_change"):
+            return None
+
+        next_mode = metadata.get("active_mode")
+        if next_mode not in {MODE_PROVIDER_PROFILE, MODE_PROVIDER_SEARCH}:
+            return None
+        if next_mode == current_mode:
+            return None
+        return next_mode
+
+    async def _run_llm_agent(
+        self,
+        *,
+        turn_id: str,
+        message: str,
+        system_context: str,
+        metadata: dict[str, Any] | None,
+        deps: AgentDependencies,
+        active_mode: str | None,
+        allow_mode_handoff: bool = True,
+    ) -> tuple[AgentResponse, list[dict[str, Any]]]:
+        """Run the selected agent and replay once after an in-run mode switch."""
+        prompt_metadata = dict(metadata or {})
+        if active_mode is not None:
+            prompt_metadata["active_mode"] = active_mode
+        llm_agent, agent_name = self._select_llm_agent(active_mode)
+        prompt_metadata["agent_name"] = agent_name
+        deps.current_message_metadata = prompt_metadata
+        user_prompt = self._build_user_prompt(message, system_context, prompt_metadata)
+
+        self._alog.info(
+            turn_id,
+            "agent.run",
+            agent_name=agent_name,
+            active_mode=active_mode,
+            model=self._settings.openai_model,
+            user_prompt_length=len(user_prompt),
+            user_prompt_preview=user_prompt[:300],
+        )
+
+        result = await llm_agent.run(
+            user_prompt,
+            deps=deps,
+            model=f"openai-chat:{self._settings.openai_model}",
+        )
+        agent_response: AgentResponse = result.output
+        tool_providers = self._provider_search.extract_provider_results_from_run_messages(
+            result.new_messages()
+        )
+        self._alog.info(
+            turn_id,
+            "agent.result",
+            agent_name=agent_name,
+            intent=agent_response.intent.value,
+            confidence=agent_response.confidence,
+            requires_action=agent_response.requires_action,
+            entities=agent_response.entities,
+            response_preview=agent_response.message[:200],
+        )
+
+        handoff_mode = self._extract_mode_handoff(
+            deps.current_message_metadata,
+            current_mode=active_mode,
+        )
+        if allow_mode_handoff and handoff_mode is not None:
+            self._alog.info(
+                turn_id,
+                "agent.mode_handoff",
+                from_agent=agent_name,
+                from_mode=active_mode,
+                to_mode=handoff_mode,
+            )
+            return await self._run_llm_agent(
+                turn_id=turn_id,
+                message=message,
+                system_context=system_context,
+                metadata=metadata,
+                deps=deps,
+                active_mode=handoff_mode,
+                allow_mode_handoff=False,
+            )
+
+        return agent_response, tool_providers
+
+    @staticmethod
     def _select_llm_agent(
         effective_mode: str | None,
     ) -> tuple[Any, str]:
@@ -752,25 +822,51 @@ class AIOrchestrator:
         state_repo: EstadoRepository,
         user_id: str,
         message: str,
+        metadata: dict[str, Any] | None,
         mode_state: dict[str, Any],
         requested_mode: str | None,
-    ) -> AgentResponse | None:
+    ) -> tuple[AgentResponse | None, dict[str, Any] | None]:
         """Ask for confirmation before leaving the current sticky top-level mode."""
         active_mode = mode_state.get("active_mode")
         pending_mode = mode_state.get("pending_mode")
+        pending_request = mode_state.get("pending_request")
         pending_confirmation = bool(mode_state.get("pending_confirmation"))
         normalized = message.strip().lower()
 
         if pending_confirmation and isinstance(pending_mode, str):
             if normalized in MODE_SWITCH_CONFIRM_YES:
-                await state_repo.save_mode(user_id, active_mode=pending_mode)
-                return self._build_mode_changed_response(pending_mode)
+                await state_repo.save_mode(
+                    user_id,
+                    active_mode=pending_mode,
+                    pending_mode=None,
+                    pending_confirmation=False,
+                    pending_request=None,
+                )
+                replay_message = None
+                replay_metadata = None
+                if isinstance(pending_request, dict):
+                    raw_message = pending_request.get("message")
+                    if isinstance(raw_message, str) and raw_message.strip():
+                        replay_message = raw_message
+                    raw_metadata = pending_request.get("metadata")
+                    if isinstance(raw_metadata, dict):
+                        replay_metadata = raw_metadata
+
+                if replay_message is not None:
+                    return None, {
+                        "message": replay_message,
+                        "metadata": replay_metadata,
+                    }
+                return self._build_mode_changed_response(pending_mode), None
             if normalized in MODE_SWITCH_CONFIRM_NO:
                 await state_repo.clear_pending_mode(user_id)
-                return self._build_mode_kept_response(active_mode)
-            return self._build_mode_confirmation_response(
-                current_mode=active_mode,
-                target_mode=pending_mode,
+                return self._build_mode_kept_response(active_mode), None
+            return (
+                self._build_mode_confirmation_response(
+                    current_mode=active_mode,
+                    target_mode=pending_mode,
+                ),
+                None,
             )
 
         if active_mode is not None and requested_mode is not None and requested_mode != active_mode:
@@ -778,13 +874,20 @@ class AIOrchestrator:
                 user_id,
                 active_mode=active_mode,
                 pending_mode=requested_mode,
+                pending_request={
+                    "message": message,
+                    "metadata": metadata if isinstance(metadata, dict) else None,
+                },
             )
-            return self._build_mode_confirmation_response(
-                current_mode=active_mode,
-                target_mode=requested_mode,
+            return (
+                self._build_mode_confirmation_response(
+                    current_mode=active_mode,
+                    target_mode=requested_mode,
+                ),
+                None,
             )
 
-        return None
+        return None, None
 
     @staticmethod
     def _build_mode_confirmation_response(
@@ -829,7 +932,10 @@ class AIOrchestrator:
         target_label = AIOrchestrator._mode_label(target_mode)
         return AgentResponse(
             intent=Intent.AYUDA,
-            message=(f"Listo, cambié al modo {target_label}. " "Seguimos por ahí."),
+            message=(
+                f"Listo, cambié al modo {target_label}. "
+                "Si querés, repetime el pedido anterior y seguimos por ahí."
+            ),
             confidence=1.0,
             requires_action=False,
             metadata={

@@ -62,6 +62,9 @@ SEARCH_MORE_NO_BUTTON_ID = "provider_search_more_no"
 PROVIDER_PAGE_SIZE = 3
 PROVIDER_SEARCH_FETCH_LIMIT = 15
 SEARCH_PREFIXES = (
+    "quiero buscar un ",
+    "quiero buscar una ",
+    "quiero buscar ",
     "buscarme un ",
     "buscarme una ",
     "buscarme ",

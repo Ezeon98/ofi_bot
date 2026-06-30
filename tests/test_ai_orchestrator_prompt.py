@@ -96,6 +96,22 @@ def test_resolve_requested_mode_still_infers_from_free_text() -> None:
     assert result["effective_mode"] == ai_orchestrator.MODE_PROVIDER_SEARCH
 
 
+def test_resolve_requested_mode_accepts_quiero_buscar_concrete_trade() -> None:
+    """Concrete search phrasing should still be recognized before the LLM."""
+    orchestrator = ai_orchestrator.AIOrchestrator.__new__(
+        ai_orchestrator.AIOrchestrator
+    )
+
+    result = orchestrator._resolve_requested_mode(
+        message="Quiero buscar un electricista",
+        metadata={"message_type": "text"},
+        active_mode=ai_orchestrator.MODE_PROVIDER_PROFILE,
+    )
+
+    assert result["requested_mode"] == ai_orchestrator.MODE_PROVIDER_SEARCH
+    assert result["effective_mode"] == ai_orchestrator.MODE_PROVIDER_PROFILE
+
+
 def test_router_prompt_requires_inference_from_problem_descriptions() -> None:
     """The agent prompt should tell the model to infer the trade from the issue."""
     assert "inferí el rubro más probable" in ROUTER_SYSTEM_PROMPT
@@ -489,9 +505,117 @@ class AIOrchestratorModeRoutingTests(IsolatedAsyncioTestCase):
             "5491112345678",
             active_mode=ai_orchestrator.MODE_PROVIDER_PROFILE,
             pending_mode=ai_orchestrator.MODE_PROVIDER_SEARCH,
+            pending_request={
+                "message": "Necesito un plomero",
+                "metadata": {"message_type": "text"},
+            },
         )
         registration_mock.assert_not_awaited()
         guided_search_mock.assert_not_awaited()
+        router_run.assert_not_awaited()
+
+    async def test_process_replays_original_request_after_mode_confirmation(self) -> None:
+        """After the user confirms, the stored request should run automatically."""
+        memory_service = self._memory_service()
+        db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+        state_repo = SimpleNamespace(
+            get_mode=AsyncMock(
+                side_effect=[
+                    {
+                        "active_mode": ai_orchestrator.MODE_PROVIDER_PROFILE,
+                        "pending_mode": ai_orchestrator.MODE_PROVIDER_SEARCH,
+                        "pending_confirmation": True,
+                        "pending_request": {
+                            "message": "Quiero buscar un electricista",
+                            "metadata": {"message_type": "text"},
+                        },
+                        "flows": {},
+                    },
+                    {
+                        "active_mode": ai_orchestrator.MODE_PROVIDER_SEARCH,
+                        "pending_mode": None,
+                        "pending_confirmation": False,
+                        "pending_request": None,
+                        "flows": {},
+                    },
+                ]
+            ),
+            save_mode=AsyncMock(),
+            request_mode_switch=AsyncMock(),
+            clear_pending_mode=AsyncMock(),
+        )
+        guided_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.BUSCAR_SERVICIO,
+            message="Encontré un electricista en Palermo.",
+            confidence=1.0,
+            entities={"rubro": "electricista", "barrio": "Palermo"},
+        )
+        location_update_mock = AsyncMock(return_value=None)
+        guided_search_mock = AsyncMock(return_value=guided_response)
+        router_run = AsyncMock()
+
+        with (
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_memory_service",
+                return_value=memory_service,
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_state_repo",
+                return_value=state_repo,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_handle_location_update",
+                new=location_update_mock,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_handle_guided_search",
+                new=guided_search_mock,
+            ),
+            patch.object(
+                ai_orchestrator,
+                "router_agent",
+                new=SimpleNamespace(run=router_run),
+            ),
+        ):
+            orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
+            response = await orchestrator.process(
+                user_id="5491112345678",
+                message="SI",
+                db=db,
+                metadata={
+                    "message_type": "interactive",
+                    "interactive_type": "button_reply",
+                    "selected_id": "mode_switch_yes",
+                    "button_id": "mode_switch_yes",
+                },
+            )
+
+        self.assertEqual(response.source, "shortcut")
+        self.assertEqual(response.intent, Intent.BUSCAR_SERVICIO.value)
+        self.assertEqual(response.message, "Encontré un electricista en Palermo.")
+        state_repo.save_mode.assert_any_await(
+            "5491112345678",
+            active_mode=ai_orchestrator.MODE_PROVIDER_SEARCH,
+            pending_mode=None,
+            pending_confirmation=False,
+            pending_request=None,
+        )
+        guided_search_mock.assert_awaited_once()
         router_run.assert_not_awaited()
 
     async def test_process_routes_to_guided_search_when_search_mode_is_active(self) -> None:
@@ -887,6 +1011,106 @@ class AIOrchestratorModeRoutingTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.source, "llm")
         search_agent_run.assert_awaited_once()
         profile_agent_run.assert_not_awaited()
+
+    async def test_process_replays_message_after_agent_mode_handoff(self) -> None:
+        """A tool-triggered mode switch should rerun the same turn once."""
+        memory_service = self._memory_service()
+        db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+        state_repo = SimpleNamespace(
+            get_mode=AsyncMock(
+                return_value={
+                    "active_mode": ai_orchestrator.MODE_PROVIDER_PROFILE,
+                    "pending_mode": None,
+                    "pending_confirmation": False,
+                    "flows": {},
+                }
+            ),
+            save_mode=AsyncMock(),
+            request_mode_switch=AsyncMock(),
+            clear_pending_mode=AsyncMock(),
+        )
+        first_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.AYUDA,
+            message="Listo, cambié al modo búsqueda de servicios.",
+            confidence=1.0,
+        )
+        second_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.BUSCAR_SERVICIO,
+            message="Encontré electricistas cerca tuyo.",
+            confidence=1.0,
+            entities={"rubro": "electricista"},
+        )
+
+        async def profile_run(prompt: str, *, deps, model):
+            deps.current_message_metadata = {
+                "active_mode": ai_orchestrator.MODE_PROVIDER_SEARCH,
+                "requested_mode_change": True,
+                "agent_name": "provider_profile_agent",
+            }
+            return SimpleNamespace(output=first_response, new_messages=lambda: [])
+
+        search_agent_run = AsyncMock(
+            return_value=SimpleNamespace(output=second_response, new_messages=lambda: [])
+        )
+
+        with (
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_memory_service",
+                return_value=memory_service,
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_state_repo",
+                return_value=state_repo,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderProfileService,
+                "maybe_handle_profile_update",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_reformat_provider_response",
+                new=AsyncMock(side_effect=lambda response, **_: response),
+            ),
+            patch.object(
+                ai_orchestrator.router_agents,
+                "provider_profile_agent",
+                new=SimpleNamespace(run=profile_run),
+                create=True,
+            ),
+            patch.object(
+                ai_orchestrator.router_agents,
+                "provider_search_agent",
+                new=SimpleNamespace(run=search_agent_run),
+                create=True,
+            ),
+        ):
+            orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
+            response = await orchestrator.process(
+                user_id="5491112345678",
+                message="Se me cortó la luz en casa",
+                db=db,
+                metadata={"message_type": "text"},
+            )
+
+        self.assertEqual(response.source, "llm")
+        self.assertEqual(response.intent, Intent.BUSCAR_SERVICIO.value)
+        self.assertEqual(response.message, "Encontré electricistas cerca tuyo.")
+        self.assertEqual(search_agent_run.await_count, 1)
+        state_repo.request_mode_switch.assert_not_awaited()
 
 
 class AIOrchestratorSystemFallbackTests(IsolatedAsyncioTestCase):

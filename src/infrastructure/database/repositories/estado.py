@@ -51,6 +51,11 @@ def _build_mode_payload(
             "active_mode": datos.get("active_mode"),
             "pending_mode": datos.get("pending_mode"),
             "pending_confirmation": bool(datos.get("pending_confirmation")),
+            "pending_request": (
+                datos.get("pending_request")
+                if isinstance(datos.get("pending_request"), dict)
+                else None
+            ),
             "flows": flows if isinstance(flows, dict) else {},
         }
 
@@ -60,6 +65,7 @@ def _build_mode_payload(
         "active_mode": inferred_mode,
         "pending_mode": None,
         "pending_confirmation": False,
+            "pending_request": None,
         "flows": flows,
     }
 
@@ -177,6 +183,7 @@ class EstadoRepository:
                 "active_mode": None,
                 "pending_mode": None,
                 "pending_confirmation": False,
+                "pending_request": None,
                 "flows": {},
             }
         return _build_mode_payload(row.estado, _decode_datos(row.datos))
@@ -188,6 +195,7 @@ class EstadoRepository:
         active_mode: str | None,
         pending_mode: str | None = None,
         pending_confirmation: bool = False,
+        pending_request: dict[str, Any] | None = None,
     ) -> None:
         """Persist top-level mode metadata while preserving existing flow data."""
         uid = await _resolve_uid(self._s, telefono)
@@ -199,6 +207,7 @@ class EstadoRepository:
             "active_mode": active_mode,
             "pending_mode": pending_mode,
             "pending_confirmation": pending_confirmation,
+            "pending_request": pending_request,
             "flows": {},
         }
         if row is not None:
@@ -206,6 +215,7 @@ class EstadoRepository:
             mode_payload["active_mode"] = active_mode
             mode_payload["pending_mode"] = pending_mode
             mode_payload["pending_confirmation"] = pending_confirmation
+            mode_payload["pending_request"] = pending_request
 
         await self._save_mode_payload(uid, mode_payload)
 
@@ -215,6 +225,7 @@ class EstadoRepository:
         *,
         active_mode: str | None,
         pending_mode: str,
+        pending_request: dict[str, Any] | None = None,
     ) -> None:
         """Store a pending mode switch awaiting explicit user confirmation."""
         await self.save_mode(
@@ -222,6 +233,7 @@ class EstadoRepository:
             active_mode=active_mode,
             pending_mode=pending_mode,
             pending_confirmation=True,
+            pending_request=pending_request,
         )
 
     async def clear_pending_mode(self, telefono: str) -> None:
@@ -232,6 +244,7 @@ class EstadoRepository:
             active_mode=mode_payload.get("active_mode"),
             pending_mode=None,
             pending_confirmation=False,
+            pending_request=None,
         )
 
     async def _get_row_by_uid(self, uid: int) -> EstadoUsuarioModel | None:
@@ -247,6 +260,11 @@ class EstadoRepository:
             "active_mode": mode_payload.get("active_mode"),
             "pending_mode": mode_payload.get("pending_mode"),
             "pending_confirmation": bool(mode_payload.get("pending_confirmation")),
+            "pending_request": (
+                mode_payload.get("pending_request")
+                if isinstance(mode_payload.get("pending_request"), dict)
+                else None
+            ),
             "flows": (
                 mode_payload.get("flows") if isinstance(mode_payload.get("flows"), dict) else {}
             ),
@@ -287,5 +305,6 @@ class EstadoRepository:
             mode_payload.get("active_mode")
             or mode_payload.get("pending_mode")
             or mode_payload.get("pending_confirmation")
+            or mode_payload.get("pending_request")
             or mode_payload.get("flows")
         )
