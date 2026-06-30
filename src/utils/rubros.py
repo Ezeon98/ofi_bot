@@ -326,6 +326,14 @@ _TOKEN_STOPWORDS = {
     "y",
 }
 
+_CANONICAL_RUBRO_SYNONYMS = {
+    "aire acondicionado": "Técnico en aire acondicionado",
+    "electricidad": "Electricista",
+    "gas": "Gasista",
+    "gasista": "Gasista",
+    "plomeria": "Plomero",
+}
+
 
 def resolve_canonical_rubro(rubro: str | None) -> str | None:
     """Return the closest canonical rubro when the input is near-canonical."""
@@ -339,6 +347,8 @@ def resolve_canonical_rubro(rubro: str | None) -> str | None:
     normalized = _normalize_rubro_text(rubro)
     if not normalized:
         return rubro
+    if normalized in _CANONICAL_RUBRO_SYNONYMS:
+        return _CANONICAL_RUBRO_SYNONYMS[normalized]
     if "aire" in normalized and "acondicionado" in normalized:
         return "Técnico en aire acondicionado"
 

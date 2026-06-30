@@ -96,8 +96,8 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
             },
         )
 
-    async def test_trade_description_is_split_into_provider_rubros(self) -> None:
-        """The rubro step should persist the services exactly as the provider describes them."""
+    async def test_trade_description_is_mapped_to_canonical_provider_rubros(self) -> None:
+        """The rubro step should persist canonical rubros derived from the reply."""
         service = ProviderRegistrationService(memory_config=SimpleNamespace(enabled=True))
         state_repo = SimpleNamespace(
             get=AsyncMock(
@@ -140,10 +140,57 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
                 "nombre": "Juan Perez",
                 "edad": 34,
                 "rubros": [
-                    "Plomeria",
-                    "Electricidad",
-                    "Aire Acondicionado",
+                    "Plomero",
+                    "Electricista",
+                    "Técnico en aire acondicionado",
                 ],
+            },
+        )
+
+    async def test_trade_description_accepts_short_provider_self_description(self) -> None:
+        """Short replies like 'soy electricista' should still map to canonical rubros."""
+        service = ProviderRegistrationService(memory_config=SimpleNamespace(enabled=True))
+        state_repo = SimpleNamespace(
+            get=AsyncMock(
+                return_value={
+                    "estado": provider_registration_service.REGISTRATION_STATE_NAME,
+                    "paso": "awaiting_trades",
+                    "nombre": "Juan Perez",
+                    "edad": 34,
+                }
+            ),
+            save=AsyncMock(),
+            delete=AsyncMock(),
+        )
+        db = SimpleNamespace(
+            scalar=AsyncMock(return_value=None),
+        )
+
+        with patch.object(
+            provider_registration_service,
+            "EstadoRepository",
+            return_value=state_repo,
+        ):
+            response = await service.maybe_handle_registration(
+                user_id="5491162527111",
+                message="Soy electricista",
+                metadata={"message_type": "text"},
+                deps=SimpleNamespace(db=db),
+                memory_service=SimpleNamespace(upsert_memory=AsyncMock()),
+                turn_id="turn-2b",
+            )
+
+        self.assertIsNotNone(response)
+        self.assertEqual(response.intent, Intent.REGISTRAR_PRESTADOR)
+        self.assertIn("Ahora decime en qué zona", response.message)
+        state_repo.save.assert_awaited_once_with(
+            "5491162527111",
+            {
+                "estado": provider_registration_service.REGISTRATION_STATE_NAME,
+                "paso": "awaiting_zone",
+                "nombre": "Juan Perez",
+                "edad": 34,
+                "rubros": ["Electricista"],
             },
         )
 

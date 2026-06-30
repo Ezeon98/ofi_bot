@@ -58,9 +58,9 @@ class ProviderProfileServiceTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.intent, Intent.ACTUALIZAR_PERFIL)
         self.assertEqual(
             response.entities["rubros"],
-            ["Electricidad", "Plomeria", "Gas"],
+            ["Electricidad", "Plomero", "Gasista"],
         )
-        self.assertEqual(response.entities["rubros_agregados"], ["Plomeria", "Gas"])
+        self.assertEqual(response.entities["rubros_agregados"], ["Plomero", "Gasista"])
         db.execute.assert_awaited_once()
 
     async def test_location_update_updates_provider_coordinates(self) -> None:

@@ -115,6 +115,8 @@ class AIOrchestrator:
         self._provider_registration = ProviderRegistrationService(
             memory_config=self._memory_config,
             agent_logger=self._alog,
+            openai_client=self._openai,
+            openai_model=settings.openai_model,
         )
         self._provider_profile = ProviderProfileService(
             agent_logger=self._alog,

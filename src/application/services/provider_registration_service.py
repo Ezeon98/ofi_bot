@@ -6,6 +6,7 @@ service providers without relying on the LLM for every turn.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import unicodedata
@@ -21,8 +22,23 @@ from src.infrastructure.database.repositories.estado import EstadoRepository
 from src.memory.service import MemoryService
 from src.tools.business.providers import CrearPrestadorInput, crear_prestador
 from src.utils.geocoding import geocode_text_location
+from src.utils.rubros import CANONICAL_RUBROS, resolve_canonical_rubro
 
 logger = logging.getLogger(__name__)
+
+_RUBROS_FOR_PROMPT = ", ".join(CANONICAL_RUBROS)
+_AI_TRADES_SYSTEM = (
+    "Sos un asistente que clasifica oficios y servicios ofrecidos por prestadores en Argentina.\n"
+    "Dado un mensaje del prestador, devolvé ÚNICAMENTE un JSON con este formato:\n"
+    '  {"rubros": ["Rubro canónico 1", "Rubro canónico 2"]}.\n'
+    "Cada elemento de rubros debe salir de esta lista exacta: "
+    + _RUBROS_FOR_PROMPT
+    + ".\n"
+    "Si el mensaje describe varios servicios, devolvé hasta 5 rubros canónicos.\n"
+    "Si no coincide literal pero describe un oficio real, elegí el rubro canónico más cercano.\n"
+    'Si el mensaje no describe servicios concretos, devolvé {"rubros": []}.\n'
+    "No incluyas texto fuera del JSON."
+)
 
 REGISTRATION_STATE_NAME = "provider_registration"
 OFFER_SERVICES_BUTTON_ID = "post_terms_offer_services"
@@ -51,6 +67,7 @@ TRADE_PREFIXES = (
     "ofrezco ",
     "se hacer ",
     "sé hacer ",
+    "soy ",
 )
 ZONE_PREFIXES = (
     "estoy en ",
@@ -70,9 +87,13 @@ class ProviderRegistrationService:
         *,
         memory_config: Any,
         agent_logger: Any | None = None,
+        openai_client: Any | None = None,
+        openai_model: str = "gpt-4o-mini",
     ) -> None:
         self._memory_config = memory_config
         self._alog = agent_logger
+        self._openai = openai_client
+        self._openai_model = openai_model
 
     async def maybe_handle_registration(
         self,
@@ -142,7 +163,7 @@ class ProviderRegistrationService:
             return self._build_trades_request_response()
 
         if paso == "awaiting_trades":
-            rubros = self._classify_trades(message)
+            rubros = await self._classify_trades(message)
             if not rubros:
                 return self._build_trades_request_response(retry=True)
             await self._save_state(
@@ -241,12 +262,41 @@ class ProviderRegistrationService:
             },
         )
 
-    def _classify_trades(self, message: str) -> list[str]:
-        """Extract provider rubros directly from the user's free-text reply."""
+    async def _classify_trades(self, message: str) -> list[str]:
+        """Extract canonical provider rubros from the user's free-text reply."""
         raw_message = self._strip_prefixes(message, TRADE_PREFIXES)
         if not raw_message.strip():
             return []
+        ai_rubros = await self._ai_classify_trades(raw_message)
+        if ai_rubros:
+            return ai_rubros
         return self._fallback_trade_labels(raw_message)
+
+    async def _ai_classify_trades(self, message: str) -> list[str]:
+        """Classify provider services into canonical rubros using the LLM."""
+        if self._openai is None:
+            return []
+
+        try:
+            resp = await self._openai.chat.completions.create(
+                model=self._openai_model,
+                messages=[
+                    {"role": "system", "content": _AI_TRADES_SYSTEM},
+                    {"role": "user", "content": message},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0,
+                max_tokens=128,
+            )
+            raw = resp.choices[0].message.content or "{}"
+            data = json.loads(raw)
+            rubros = data.get("rubros")
+            if not isinstance(rubros, list):
+                return []
+            return self._canonicalize_trade_labels(rubros)
+        except Exception:
+            logger.exception("AI trade classification failed, falling back to heuristics")
+            return []
 
     async def _resolve_location(
         self,
@@ -371,16 +421,29 @@ class ProviderRegistrationService:
 
     @staticmethod
     def _fallback_trade_labels(raw_message: str) -> list[str]:
-        """Split a free-text services reply into up to five provider rubro labels."""
+        """Map a free-text services reply into up to five canonical rubros."""
         parts = re.split(r",|/|\by\b|\be\b", raw_message, flags=re.IGNORECASE)
+        return ProviderRegistrationService._canonicalize_trade_labels(parts)
+
+    @staticmethod
+    def _canonicalize_trade_labels(candidates: list[Any]) -> list[str]:
+        """Normalize candidate trade labels into unique canonical rubros."""
         labels: list[str] = []
-        for part in parts:
+        seen: set[str] = set()
+        for part in candidates:
+            if not isinstance(part, str):
+                continue
             candidate = ProviderRegistrationService._normalize_text(part)
             if len(candidate) < 3:
                 continue
-            label = candidate.title()
-            if label not in labels:
-                labels.append(label)
+            label = resolve_canonical_rubro(candidate)
+            if label not in CANONICAL_RUBROS:
+                continue
+            normalized_label = label.lower()
+            if normalized_label in seen:
+                continue
+            seen.add(normalized_label)
+            labels.append(label)
             if len(labels) == 5:
                 break
         return labels
