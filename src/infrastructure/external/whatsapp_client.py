@@ -62,7 +62,9 @@ async def enviar_mensaje(telefono: str, texto: str) -> None:
     async with httpx.AsyncClient() as client:
         resp = await client.post(s.meta_api_url, headers=s.meta_headers, json=payload)
         if resp.status_code != 200:
-            logger.error("Error sending message to %s: %s %s", telefono, resp.status_code, _resp_body(resp))
+            logger.error(
+                "Error sending message to %s: %s %s", telefono, resp.status_code, _resp_body(resp)
+            )
 
 
 async def enviar_typing(telefono: str, message_id: str = "") -> None:
@@ -194,7 +196,9 @@ async def enviar_lista_interactiva(
     async with httpx.AsyncClient() as client:
         resp = await client.post(s.meta_api_url, headers=s.meta_headers, json=payload)
         if resp.status_code != 200:
-            logger.error("Error sending list to %s: %s %s", telefono, resp.status_code, _resp_body(resp))
+            logger.error(
+                "Error sending list to %s: %s %s", telefono, resp.status_code, _resp_body(resp)
+            )
 
 
 async def enviar_botones_respuesta(
@@ -223,7 +227,9 @@ async def enviar_botones_respuesta(
     async with httpx.AsyncClient() as client:
         resp = await client.post(s.meta_api_url, headers=s.meta_headers, json=payload)
         if resp.status_code != 200:
-            logger.error("Error sending buttons to %s: %s %s", telefono, resp.status_code, _resp_body(resp))
+            logger.error(
+                "Error sending buttons to %s: %s %s", telefono, resp.status_code, _resp_body(resp)
+            )
 
 
 async def enviar_boton_cta(telefono: str, body_text: str, display_text: str, url: str) -> None:

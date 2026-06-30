@@ -29,9 +29,7 @@ class UsuarioModel(Base):
     """User model."""
 
     __tablename__ = "usuarios"
-    __table_args__ = (
-        Index("ix_usuarios_tier_expires", "tier", "tier_expires_at"),
-    )
+    __table_args__ = (Index("ix_usuarios_tier_expires", "tier", "tier_expires_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telefono: Mapped[str] = mapped_column(String(30), unique=True, nullable=False, index=True)
@@ -251,9 +249,7 @@ class ConversationTurnModel(Base):
     """Individual message turn within a conversation."""
 
     __tablename__ = "conversation_turns"
-    __table_args__ = (
-        Index("ix_turns_conversation_created", "conversation_id", "created_at"),
-    )
+    __table_args__ = (Index("ix_turns_conversation_created", "conversation_id", "created_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[int] = mapped_column(

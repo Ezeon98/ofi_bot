@@ -49,9 +49,7 @@ class MemoryExtractor:
         assistant_response: str,
     ) -> list[ExtractedFact]:
         """Return facts extracted from this single exchange."""
-        user_content = (
-            f"USER: {user_message}\nASSISTANT: {assistant_response}"
-        )
+        user_content = f"USER: {user_message}\nASSISTANT: {assistant_response}"
         try:
             completion = await self._client.chat.completions.create(
                 model=self._model,

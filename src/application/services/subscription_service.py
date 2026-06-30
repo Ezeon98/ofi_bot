@@ -63,94 +63,110 @@ def get_available_plans() -> list[dict[str, Any]]:
     plans: list[dict[str, Any]] = []
 
     if s.mp_plan_monthly_trial:
-        plans.append({
-            "id": s.mp_plan_monthly_trial,
-            "type": "pro_monthly_trial",
-            "tier": "pro",
-            "name": "Pro Mensual",
-            "price": s.pro_monthly_price,
-            "currency": "ARS",
-            "frequency": "monthly",
-            "has_free_trial": True,
-        })
+        plans.append(
+            {
+                "id": s.mp_plan_monthly_trial,
+                "type": "pro_monthly_trial",
+                "tier": "pro",
+                "name": "Pro Mensual",
+                "price": s.pro_monthly_price,
+                "currency": "ARS",
+                "frequency": "monthly",
+                "has_free_trial": True,
+            }
+        )
     if s.mp_plan_monthly_no_trial:
-        plans.append({
-            "id": s.mp_plan_monthly_no_trial,
-            "type": "pro_monthly",
-            "tier": "pro",
-            "name": "Pro Mensual",
-            "price": s.pro_monthly_price,
-            "currency": "ARS",
-            "frequency": "monthly",
-            "has_free_trial": False,
-        })
+        plans.append(
+            {
+                "id": s.mp_plan_monthly_no_trial,
+                "type": "pro_monthly",
+                "tier": "pro",
+                "name": "Pro Mensual",
+                "price": s.pro_monthly_price,
+                "currency": "ARS",
+                "frequency": "monthly",
+                "has_free_trial": False,
+            }
+        )
     if s.mp_plan_annual_trial:
-        plans.append({
-            "id": s.mp_plan_annual_trial,
-            "type": "pro_annual_trial",
-            "tier": "pro",
-            "name": "Pro Anual",
-            "price": s.pro_annual_price,
-            "currency": "ARS",
-            "frequency": "yearly",
-            "has_free_trial": True,
-        })
+        plans.append(
+            {
+                "id": s.mp_plan_annual_trial,
+                "type": "pro_annual_trial",
+                "tier": "pro",
+                "name": "Pro Anual",
+                "price": s.pro_annual_price,
+                "currency": "ARS",
+                "frequency": "yearly",
+                "has_free_trial": True,
+            }
+        )
     if s.mp_plan_annual_no_trial:
-        plans.append({
-            "id": s.mp_plan_annual_no_trial,
-            "type": "pro_annual",
-            "tier": "pro",
-            "name": "Pro Anual",
-            "price": s.pro_annual_price,
-            "currency": "ARS",
-            "frequency": "yearly",
-            "has_free_trial": False,
-        })
+        plans.append(
+            {
+                "id": s.mp_plan_annual_no_trial,
+                "type": "pro_annual",
+                "tier": "pro",
+                "name": "Pro Anual",
+                "price": s.pro_annual_price,
+                "currency": "ARS",
+                "frequency": "yearly",
+                "has_free_trial": False,
+            }
+        )
 
     if s.mp_premium_monthly_trial:
-        plans.append({
-            "id": s.mp_premium_monthly_trial,
-            "type": "premium_monthly_trial",
-            "tier": "premium",
-            "name": "Premium Mensual",
-            "price": s.premium_monthly_price,
-            "currency": "ARS",
-            "frequency": "monthly",
-            "has_free_trial": True,
-        })
+        plans.append(
+            {
+                "id": s.mp_premium_monthly_trial,
+                "type": "premium_monthly_trial",
+                "tier": "premium",
+                "name": "Premium Mensual",
+                "price": s.premium_monthly_price,
+                "currency": "ARS",
+                "frequency": "monthly",
+                "has_free_trial": True,
+            }
+        )
     if s.mp_premium_monthly_no_trial:
-        plans.append({
-            "id": s.mp_premium_monthly_no_trial,
-            "type": "premium_monthly",
-            "tier": "premium",
-            "name": "Premium Mensual",
-            "price": s.premium_monthly_price,
-            "currency": "ARS",
-            "frequency": "monthly",
-            "has_free_trial": False,
-        })
+        plans.append(
+            {
+                "id": s.mp_premium_monthly_no_trial,
+                "type": "premium_monthly",
+                "tier": "premium",
+                "name": "Premium Mensual",
+                "price": s.premium_monthly_price,
+                "currency": "ARS",
+                "frequency": "monthly",
+                "has_free_trial": False,
+            }
+        )
     if s.mp_premium_annual_trial:
-        plans.append({
-            "id": s.mp_premium_annual_trial,
-            "type": "premium_annual_trial",
-            "tier": "premium",
-            "name": "Premium Anual",
-            "price": s.premium_annual_price,
-            "currency": "ARS",
-            "frequency": "yearly",
-            "has_free_trial": True,
-        })
+        plans.append(
+            {
+                "id": s.mp_premium_annual_trial,
+                "type": "premium_annual_trial",
+                "tier": "premium",
+                "name": "Premium Anual",
+                "price": s.premium_annual_price,
+                "currency": "ARS",
+                "frequency": "yearly",
+                "has_free_trial": True,
+            }
+        )
     if s.mp_premium_annual_no_trial:
-        plans.append({
-            "id": s.mp_premium_annual_no_trial,
-            "type": "premium_annual",
-            "tier": "premium",
-            "name": "Premium Anual",
-            "price": s.premium_annual_price,
-            "currency": "ARS",
-            "frequency": "yearly",
-            "has_free_trial": False,
-        })
+        plans.append(
+            {
+                "id": s.mp_premium_annual_no_trial,
+                "type": "premium_annual",
+                "tier": "premium",
+                "name": "Premium Anual",
+                "price": s.premium_annual_price,
+                "currency": "ARS",
+                "frequency": "yearly",
+                "has_free_trial": False,
+            }
+        )
 
     return plans
 
@@ -184,7 +200,9 @@ async def create_subscription(
 
     logger.info(
         "Creating MP preapproval: plan=%s user_id=%s email=%s",
-        plan_id, user_id, payer_email,
+        plan_id,
+        user_id,
+        payer_email,
     )
 
     async with httpx.AsyncClient(timeout=30) as client:
@@ -194,7 +212,8 @@ async def create_subscription(
 
     logger.info(
         "MP preapproval created: id=%s status=%s",
-        data.get("id"), data.get("status"),
+        data.get("id"),
+        data.get("status"),
     )
     return data
 

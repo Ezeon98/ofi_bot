@@ -61,6 +61,41 @@ def test_build_user_prompt_includes_metadata_block() -> None:
     assert "Mensaje actual del usuario: Quiero un plomero" in prompt
 
 
+def test_resolve_requested_mode_prefers_explicit_metadata_mode() -> None:
+    """Requested mode from UI metadata should win over text heuristics."""
+    orchestrator = ai_orchestrator.AIOrchestrator.__new__(
+        ai_orchestrator.AIOrchestrator
+    )
+
+    result = orchestrator._resolve_requested_mode(
+        message="Buscar servicios",
+        metadata={
+            "button_id": "post_terms_offer_services",
+            "requested_mode": ai_orchestrator.MODE_PROVIDER_PROFILE,
+        },
+        active_mode=None,
+    )
+
+    assert result["requested_mode"] == ai_orchestrator.MODE_PROVIDER_PROFILE
+    assert result["effective_mode"] == ai_orchestrator.MODE_PROVIDER_PROFILE
+
+
+def test_resolve_requested_mode_still_infers_from_free_text() -> None:
+    """Explicit user text should still activate search mode without metadata."""
+    orchestrator = ai_orchestrator.AIOrchestrator.__new__(
+        ai_orchestrator.AIOrchestrator
+    )
+
+    result = orchestrator._resolve_requested_mode(
+        message="Quiero buscar un servicio",
+        metadata={"message_type": "text"},
+        active_mode=None,
+    )
+
+    assert result["requested_mode"] == ai_orchestrator.MODE_PROVIDER_SEARCH
+    assert result["effective_mode"] == ai_orchestrator.MODE_PROVIDER_SEARCH
+
+
 def test_router_prompt_requires_inference_from_problem_descriptions() -> None:
     """The agent prompt should tell the model to infer the trade from the issue."""
     assert "inferí el rubro más probable" in ROUTER_SYSTEM_PROMPT
@@ -354,6 +389,504 @@ class AIOrchestratorAgentSearchTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.messages[0]["action"]["label"], "Contactar")
         router_run.assert_awaited_once()
         guided_search_mock.assert_not_awaited()
+
+
+class AIOrchestratorModeRoutingTests(IsolatedAsyncioTestCase):
+    """Validate top-level mode coordination before the mixed router agent."""
+
+    def _settings(self) -> SimpleNamespace:
+        """Build test settings with the same defaults as the other suites."""
+        return SimpleNamespace(
+            memory_enabled=True,
+            memory_max_memories=20,
+            memory_max_tokens=2000,
+            memory_summarize_after=50,
+            memory_importance_threshold=0.7,
+            agent_logging_enabled=False,
+            openai_api_key=SimpleNamespace(get_secret_value=lambda: ""),
+            openai_api_key_secondary=SimpleNamespace(get_secret_value=lambda: ""),
+            openai_model="gpt-4o-mini",
+            openai_api_keys=lambda: tuple(),
+        )
+
+    def _memory_service(self) -> SimpleNamespace:
+        """Build the minimal memory service used by orchestrator tests."""
+        return SimpleNamespace(
+            get_memories=AsyncMock(return_value=[]),
+            get_or_create_conversation=AsyncMock(
+                return_value=SimpleNamespace(id=1, summary=None)
+            ),
+            get_recent_turns=AsyncMock(return_value=[]),
+            process_interaction=AsyncMock(),
+            upsert_memory=AsyncMock(),
+        )
+
+    async def test_process_confirms_switch_before_leaving_profile_mode(self) -> None:
+        """An explicit search request should not immediately leave profile mode."""
+        memory_service = self._memory_service()
+        db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+        state_repo = SimpleNamespace(
+            get_mode=AsyncMock(
+                return_value={
+                    "active_mode": ai_orchestrator.MODE_PROVIDER_PROFILE,
+                    "pending_mode": None,
+                    "pending_confirmation": False,
+                    "flows": {},
+                }
+            ),
+            save_mode=AsyncMock(),
+            request_mode_switch=AsyncMock(),
+            clear_pending_mode=AsyncMock(),
+        )
+        router_run = AsyncMock()
+        guided_search_mock = AsyncMock(return_value=None)
+        registration_mock = AsyncMock(return_value=None)
+
+        with (
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_memory_service",
+                return_value=memory_service,
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_state_repo",
+                return_value=state_repo,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=registration_mock,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_handle_guided_search",
+                new=guided_search_mock,
+            ),
+            patch.object(
+                ai_orchestrator,
+                "router_agent",
+                new=SimpleNamespace(run=router_run),
+            ),
+        ):
+            orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
+            response = await orchestrator.process(
+                user_id="5491112345678",
+                message="Necesito un plomero",
+                db=db,
+                metadata={"message_type": "text"},
+            )
+
+        self.assertEqual(response.source, "mode_switch")
+        self.assertIn("¿Querés cambiar a modo búsqueda de servicios?", response.message)
+        state_repo.request_mode_switch.assert_awaited_once_with(
+            "5491112345678",
+            active_mode=ai_orchestrator.MODE_PROVIDER_PROFILE,
+            pending_mode=ai_orchestrator.MODE_PROVIDER_SEARCH,
+        )
+        registration_mock.assert_not_awaited()
+        guided_search_mock.assert_not_awaited()
+        router_run.assert_not_awaited()
+
+    async def test_process_routes_to_guided_search_when_search_mode_is_active(self) -> None:
+        """Search mode should prefer guided-search shortcuts before the router agent."""
+        memory_service = self._memory_service()
+        db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+        state_repo = SimpleNamespace(
+            get_mode=AsyncMock(
+                return_value={
+                    "active_mode": ai_orchestrator.MODE_PROVIDER_SEARCH,
+                    "pending_mode": None,
+                    "pending_confirmation": False,
+                    "flows": {},
+                }
+            ),
+            save_mode=AsyncMock(),
+            request_mode_switch=AsyncMock(),
+            clear_pending_mode=AsyncMock(),
+        )
+        guided_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.BUSCAR_SERVICIO,
+            message="Encontré un plomero en Caballito.",
+            confidence=1.0,
+            entities={"rubro": "plomero", "barrio": "Caballito"},
+        )
+        location_update_mock = AsyncMock(return_value=None)
+        guided_search_mock = AsyncMock(return_value=guided_response)
+        registration_mock = AsyncMock(return_value=None)
+        router_run = AsyncMock()
+
+        with (
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_memory_service",
+                return_value=memory_service,
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_state_repo",
+                return_value=state_repo,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=registration_mock,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_handle_location_update",
+                new=location_update_mock,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_handle_guided_search",
+                new=guided_search_mock,
+            ),
+            patch.object(
+                ai_orchestrator,
+                "router_agent",
+                new=SimpleNamespace(run=router_run),
+            ),
+        ):
+            orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
+            response = await orchestrator.process(
+                user_id="5491112345678",
+                message="Necesito un plomero",
+                db=db,
+                metadata={"message_type": "text"},
+            )
+
+        self.assertEqual(response.source, "shortcut")
+        self.assertEqual(response.intent, Intent.BUSCAR_SERVICIO.value)
+        guided_search_mock.assert_awaited_once()
+        location_update_mock.assert_awaited_once()
+        registration_mock.assert_not_awaited()
+        router_run.assert_not_awaited()
+
+    async def test_process_routes_to_registration_when_profile_mode_is_active(self) -> None:
+        """Profile mode should prefer the provider onboarding shortcut."""
+        memory_service = self._memory_service()
+        db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+        state_repo = SimpleNamespace(
+            get_mode=AsyncMock(
+                return_value={
+                    "active_mode": ai_orchestrator.MODE_PROVIDER_PROFILE,
+                    "pending_mode": None,
+                    "pending_confirmation": False,
+                    "flows": {},
+                }
+            ),
+            save_mode=AsyncMock(),
+            request_mode_switch=AsyncMock(),
+            clear_pending_mode=AsyncMock(),
+        )
+        registration_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.REGISTRAR_PRESTADOR,
+            message="¿Cómo te llamás?",
+            confidence=1.0,
+        )
+        registration_mock = AsyncMock(return_value=registration_response)
+        guided_search_mock = AsyncMock(return_value=None)
+        router_run = AsyncMock()
+
+        with (
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_memory_service",
+                return_value=memory_service,
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_state_repo",
+                return_value=state_repo,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=registration_mock,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_handle_guided_search",
+                new=guided_search_mock,
+            ),
+            patch.object(
+                ai_orchestrator,
+                "router_agent",
+                new=SimpleNamespace(run=router_run),
+            ),
+        ):
+            orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
+            response = await orchestrator.process(
+                user_id="5491112345678",
+                message="Quiero ofrecer mis servicios",
+                db=db,
+                metadata={"button_id": ai_orchestrator.OFFER_SERVICES_BUTTON_ID},
+            )
+
+        self.assertEqual(response.source, "shortcut")
+        self.assertEqual(response.intent, Intent.REGISTRAR_PRESTADOR.value)
+        registration_mock.assert_awaited_once()
+        guided_search_mock.assert_not_awaited()
+        router_run.assert_not_awaited()
+
+    async def test_process_routes_to_profile_update_before_agent(self) -> None:
+        """Profile mode should run explicit profile update shortcuts before the agent."""
+        memory_service = self._memory_service()
+        db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+        state_repo = SimpleNamespace(
+            get_mode=AsyncMock(
+                return_value={
+                    "active_mode": ai_orchestrator.MODE_PROVIDER_PROFILE,
+                    "pending_mode": None,
+                    "pending_confirmation": False,
+                    "flows": {},
+                }
+            ),
+            save_mode=AsyncMock(),
+            request_mode_switch=AsyncMock(),
+            clear_pending_mode=AsyncMock(),
+        )
+        profile_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.ACTUALIZAR_PERFIL,
+            message="Listo, sumé plomería a tu perfil de prestador.",
+            confidence=1.0,
+            entities={"rubros_agregados": ["Plomería"]},
+        )
+        registration_mock = AsyncMock(return_value=None)
+        profile_update_mock = AsyncMock(return_value=profile_response)
+        guided_search_mock = AsyncMock(return_value=None)
+        router_run = AsyncMock()
+
+        with (
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_memory_service",
+                return_value=memory_service,
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_state_repo",
+                return_value=state_repo,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=registration_mock,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderProfileService,
+                "maybe_handle_profile_update",
+                new=profile_update_mock,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_handle_guided_search",
+                new=guided_search_mock,
+            ),
+            patch.object(
+                ai_orchestrator,
+                "router_agent",
+                new=SimpleNamespace(run=router_run),
+            ),
+        ):
+            orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
+            response = await orchestrator.process(
+                user_id="5491112345678",
+                message="Tambien hago plomeria",
+                db=db,
+                metadata={"message_type": "text"},
+            )
+
+        self.assertEqual(response.source, "shortcut")
+        self.assertEqual(response.intent, Intent.ACTUALIZAR_PERFIL.value)
+        registration_mock.assert_awaited_once()
+        profile_update_mock.assert_awaited_once()
+        guided_search_mock.assert_not_awaited()
+        router_run.assert_not_awaited()
+
+    async def test_process_selects_profile_agent_for_llm_fallback(self) -> None:
+        """Profile mode should use the provider-profile LLM agent when no shortcut applies."""
+        memory_service = self._memory_service()
+        db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+        state_repo = SimpleNamespace(
+            get_mode=AsyncMock(
+                return_value={
+                    "active_mode": ai_orchestrator.MODE_PROVIDER_PROFILE,
+                    "pending_mode": None,
+                    "pending_confirmation": False,
+                    "flows": {},
+                }
+            ),
+            save_mode=AsyncMock(),
+            request_mode_switch=AsyncMock(),
+            clear_pending_mode=AsyncMock(),
+        )
+        llm_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.CONSULTAR_ESTADO,
+            message="Tu perfil sigue pendiente de revisión.",
+            confidence=1.0,
+        )
+        profile_agent_run = AsyncMock(
+            return_value=SimpleNamespace(output=llm_response, new_messages=lambda: [])
+        )
+        search_agent_run = AsyncMock()
+
+        with (
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_memory_service",
+                return_value=memory_service,
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_state_repo",
+                return_value=state_repo,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderProfileService,
+                "maybe_handle_profile_update",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                ai_orchestrator.router_agents,
+                "provider_profile_agent",
+                new=SimpleNamespace(run=profile_agent_run),
+                create=True,
+            ),
+            patch.object(
+                ai_orchestrator.router_agents,
+                "provider_search_agent",
+                new=SimpleNamespace(run=search_agent_run),
+                create=True,
+            ),
+        ):
+            orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
+            response = await orchestrator.process(
+                user_id="5491112345678",
+                message="Quiero saber el estado de mi perfil",
+                db=db,
+                metadata={"message_type": "text"},
+            )
+
+        self.assertEqual(response.source, "llm")
+        self.assertEqual(response.message, "Tu perfil sigue pendiente de revisión.")
+        profile_agent_run.assert_awaited_once()
+        search_agent_run.assert_not_awaited()
+
+    async def test_process_selects_search_agent_for_llm_fallback(self) -> None:
+        """Search mode should use the search LLM agent when no shortcut applies."""
+        memory_service = self._memory_service()
+        db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+        state_repo = SimpleNamespace(
+            get_mode=AsyncMock(
+                return_value={
+                    "active_mode": ai_orchestrator.MODE_PROVIDER_SEARCH,
+                    "pending_mode": None,
+                    "pending_confirmation": False,
+                    "flows": {},
+                }
+            ),
+            save_mode=AsyncMock(),
+            request_mode_switch=AsyncMock(),
+            clear_pending_mode=AsyncMock(),
+        )
+        llm_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.CONSULTAR_SISTEMA,
+            message="MiOficio conecta clientes con prestadores verificados.",
+            confidence=1.0,
+        )
+        search_agent_run = AsyncMock(
+            return_value=SimpleNamespace(output=llm_response, new_messages=lambda: [])
+        )
+        profile_agent_run = AsyncMock()
+
+        with (
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_memory_service",
+                return_value=memory_service,
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_state_repo",
+                return_value=state_repo,
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_handle_location_update",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderSearchService,
+                "maybe_handle_guided_search",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                ai_orchestrator.router_agents,
+                "provider_profile_agent",
+                new=SimpleNamespace(run=profile_agent_run),
+                create=True,
+            ),
+            patch.object(
+                ai_orchestrator.router_agents,
+                "provider_search_agent",
+                new=SimpleNamespace(run=search_agent_run),
+                create=True,
+            ),
+        ):
+            orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
+            response = await orchestrator.process(
+                user_id="5491112345678",
+                message="Cómo funciona MiOficio",
+                db=db,
+                metadata={"message_type": "text"},
+            )
+
+        self.assertEqual(response.source, "llm")
+        search_agent_run.assert_awaited_once()
+        profile_agent_run.assert_not_awaited()
 
 
 class AIOrchestratorSystemFallbackTests(IsolatedAsyncioTestCase):

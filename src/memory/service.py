@@ -70,11 +70,11 @@ class MemoryService:
         intent: str | None = None,
     ) -> ConversationTurnRead:
         async with self._db_lock:
-            return await self._conversations.add_turn(
-                conversation_id, role, content, intent
-            )
+            return await self._conversations.add_turn(conversation_id, role, content, intent)
 
-    async def upsert_memory(self, user_id: int, key: str, value: str, importance: float = 0.7) -> MemoryRead:
+    async def upsert_memory(
+        self, user_id: int, key: str, value: str, importance: float = 0.7
+    ) -> MemoryRead:
         async with self._db_lock:
             return await self._memories.upsert(
                 user_id,
@@ -100,12 +100,8 @@ class MemoryService:
 
         # 1. Persist turns
         async with self._db_lock:
-            await self._conversations.add_turn(
-                conversation_id, "user", user_message, intent
-            )
-            await self._conversations.add_turn(
-                conversation_id, "assistant", assistant_response
-            )
+            await self._conversations.add_turn(conversation_id, "user", user_message, intent)
+            await self._conversations.add_turn(conversation_id, "assistant", assistant_response)
 
         # 2. Extract and upsert facts
         facts = await self._extractor.extract(user_message, assistant_response)
@@ -126,9 +122,7 @@ class MemoryService:
             count = await self._memories.count_by_user(user_id)
         if count > self._config.max_memories:
             async with self._db_lock:
-                await self._memories.drop_least_important(
-                    user_id, self._config.max_memories
-                )
+                await self._memories.drop_least_important(user_id, self._config.max_memories)
 
         # 4. Summarise if turn count exceeds threshold
         async with self._db_lock:
@@ -151,7 +145,5 @@ class MemoryService:
         summary = await self._summarizer.summarize(raw)
         async with self._db_lock:
             await self._conversations.update_summary(conversation_id, summary)
-            await self._conversations.delete_turns_before_offset(
-                conversation_id, keep_last
-            )
+            await self._conversations.delete_turns_before_offset(conversation_id, keep_last)
         logger.info("Summarised conversation %d for user %s", conversation_id, user_id)

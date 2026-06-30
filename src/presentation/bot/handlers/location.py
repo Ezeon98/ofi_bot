@@ -5,6 +5,7 @@ from __future__ import annotations
 from src.infrastructure.external.whatsapp_client import enviar_mensaje
 from src.utils.geocoding import reverse_geocode_location
 
+
 async def procesar_ubicacion(sender: str, lat: float, lon: float) -> None:
     """Reverse-geocode coordinates and reply to the user."""
     data = await reverse_geocode_location(lat, lon)

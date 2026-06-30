@@ -44,9 +44,7 @@ class AgentContext:
             parts.append(f"## Resumen de conversación previa\n{self.conversation_summary}")
 
         if self.recent_turns:
-            history_lines = "\n".join(
-                f"  {t.role.upper()}: {t.content}" for t in self.recent_turns
-            )
+            history_lines = "\n".join(f"  {t.role.upper()}: {t.content}" for t in self.recent_turns)
             parts.append(f"## Historial reciente\n{history_lines}")
 
         return "\n\n".join(parts) if parts else ""

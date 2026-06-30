@@ -231,6 +231,103 @@ class ProviderSearchServiceShortcutTests(IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["rubro"], "electricista")
         self.assertEqual(kwargs["location"], {"barrio": "caballito"})
 
+    async def test_awaiting_need_greeting_defers_to_router(self) -> None:
+        """Small talk after the zone prompt should not hallucinate a search rubro."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+
+        with (
+            patch.object(
+                provider_search_service,
+                "EstadoRepository",
+                return_value=SimpleNamespace(
+                    get=AsyncMock(
+                        return_value={
+                            "estado": provider_search_service.SEARCH_STATE_NAME,
+                            "paso": "awaiting_need",
+                        }
+                    ),
+                    save=AsyncMock(),
+                    delete=AsyncMock(),
+                ),
+            ),
+            patch.object(
+                ProviderSearchService,
+                "_ai_extract_rubro_and_zone",
+                new=AsyncMock(return_value=(None, None)),
+            ) as extract_mock,
+            patch.object(
+                ProviderSearchService,
+                "_build_search_results_response",
+                new=AsyncMock(),
+            ) as build_response_mock,
+            patch.object(
+                provider_search_service,
+                "geocode_text_location",
+                new=AsyncMock(return_value={}),
+            ),
+        ):
+            response = await service.maybe_handle_guided_search(
+                user_id="5491162527111",
+                message="Hola",
+                metadata={"message_type": "text"},
+                deps=SimpleNamespace(db=object()),
+                memory_service=SimpleNamespace(),
+                memories=[],
+                turn_id="turn-awaiting-need-greeting",
+            )
+
+        self.assertIsNone(response)
+        extract_mock.assert_awaited_once()
+        build_response_mock.assert_not_awaited()
+
+    async def test_awaiting_zone_greeting_defers_to_router(self) -> None:
+        """Small talk after the service prompt should not auto-run a stored-location search."""
+        service = ProviderSearchService(
+            memory_config=SimpleNamespace(enabled=True),
+        )
+
+        with (
+            patch.object(
+                provider_search_service,
+                "EstadoRepository",
+                return_value=SimpleNamespace(
+                    get=AsyncMock(
+                        return_value={
+                            "estado": provider_search_service.SEARCH_STATE_NAME,
+                            "paso": "awaiting_zone",
+                            "rubro": "electricista",
+                        }
+                    ),
+                    save=AsyncMock(),
+                    delete=AsyncMock(),
+                ),
+            ),
+            patch.object(
+                ProviderSearchService,
+                "_build_search_results_response",
+                new=AsyncMock(),
+            ) as build_response_mock,
+        ):
+            response = await service.maybe_handle_guided_search(
+                user_id="5491162527111",
+                message="Hola",
+                metadata={"message_type": "text"},
+                deps=SimpleNamespace(db=object()),
+                memory_service=SimpleNamespace(),
+                memories=[
+                    SimpleNamespace(key="latitude", value="-34.7"),
+                    SimpleNamespace(key="longitude", value="-58.31"),
+                    SimpleNamespace(key="barrio", value="Villa Barilari"),
+                    SimpleNamespace(key="ciudad", value="Partido de Avellaneda"),
+                ],
+                turn_id="turn-awaiting-zone-greeting",
+            )
+
+        self.assertIsNone(response)
+        build_response_mock.assert_not_awaited()
+
     async def test_awaiting_need_inline_zone_overrides_stored_location(self) -> None:
         """An explicit zone reply should replace stale stored search memory."""
         service = ProviderSearchService(

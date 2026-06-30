@@ -32,31 +32,53 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.dependencies import AgentDependencies
-from src.agents.models.response import AgentResponse, Intent
-from src.agents.router_agent import router_agent
+from src.agents.models.response import (
+    AgentResponse,
+    Intent,
+    Message,
+    MessageAction,
+    ReplyButton,
+)
+import src.agents.router_agent as router_agents
+from src.application.services.provider_profile_service import (
+    ProviderProfileService,
+)
+from src.application.services.provider_registration_service import (
+    OFFER_SERVICES_BUTTON_ID,
+    ProviderRegistrationService,
+)
+from src.application.services.provider_search_service import (
+    SEARCH_BUTTON_ID,
+    ProviderSearchService,
+)
 from src.context.builder import ContextBuilder
 from src.infrastructure.config import Settings
+from src.infrastructure.database.repositories.estado import (
+    EstadoRepository,
+    MODE_PROVIDER_PROFILE,
+    MODE_PROVIDER_SEARCH,
+)
 from src.infrastructure.database.repositories.usuario import UsuarioRepository
 from src.infrastructure.external.openai_client import build_openai_client
 from src.memory.extractor import MemoryExtractor
 from src.memory.models import MemoryConfig
 from src.memory.service import MemoryService
 from src.memory.summarizer import MemorySummarizer
-from src.application.services.provider_registration_service import ProviderRegistrationService
-from src.application.services.provider_search_service import ProviderSearchService
 from src.application.services.system_fallback_service import SystemFallbackService
 from src.utils.agent_logger import AgentLogger
 
 logger = logging.getLogger(__name__)
+
+MODE_SWITCH_CONFIRM_YES = {"si", "sí"}
+MODE_SWITCH_CONFIRM_NO = {"no"}
+router_agent = getattr(router_agents, "router_agent", None)
 
 
 class OrchestratorResponse(BaseModel):
     """What the bot layer receives — channel-agnostic."""
 
     message: str
-    source: str = Field(
-        description="Pipeline branch that produced the response: shortcut or llm"
-    )
+    source: str = Field(description="Pipeline branch that produced the response: shortcut or llm")
     messages: list[dict[str, Any]] = Field(
         default_factory=list,
         description=(
@@ -94,6 +116,9 @@ class AIOrchestrator:
             memory_config=self._memory_config,
             agent_logger=self._alog,
         )
+        self._provider_profile = ProviderProfileService(
+            agent_logger=self._alog,
+        )
         self._provider_search = ProviderSearchService(
             memory_config=self._memory_config,
             agent_logger=self._alog,
@@ -119,7 +144,8 @@ class AIOrchestrator:
 
         # ── Pipeline entry ────────────────────────────────────────────────
         self._alog.info(
-            turn_id, "pipeline.start",
+            turn_id,
+            "pipeline.start",
             user_id=user_id,
             message_length=len(message),
             message_preview=message[:120],
@@ -152,7 +178,8 @@ class AIOrchestrator:
         recent_turns = await memory_service.get_recent_turns(conversation.id)
 
         self._alog.info(
-            turn_id, "memory.loaded",
+            turn_id,
+            "memory.loaded",
             memory_count=len(memories),
             memory_keys=[m.key for m in memories],
             conversation_id=conversation.id,
@@ -168,7 +195,8 @@ class AIOrchestrator:
         )
 
         self._alog.info(
-            turn_id, "context.built",
+            turn_id,
+            "context.built",
             system_context_length=len(context.to_system_context()),
             conversation_id=context.conversation_id,
         )
@@ -184,9 +212,60 @@ class AIOrchestrator:
             current_message_metadata=metadata,
         )
 
+        state_repo = self._build_state_repo(db)
+        mode_state = {
+            "active_mode": None,
+            "pending_mode": None,
+            "pending_confirmation": False,
+            "flows": {},
+        }
+        if state_repo is not None:
+            mode_state = await state_repo.get_mode(user_id)
+            mode_resolution = self._resolve_requested_mode(
+                message=message,
+                metadata=metadata,
+                active_mode=mode_state.get("active_mode"),
+            )
+
+            confirmation_response = await self._maybe_handle_mode_confirmation(
+                state_repo=state_repo,
+                user_id=user_id,
+                message=message,
+                mode_state=mode_state,
+                requested_mode=mode_resolution["requested_mode"],
+            )
+            if confirmation_response is not None:
+                await db.commit()
+                return self._to_orchestrator_response(
+                    confirmation_response,
+                    source="mode_switch",
+                )
+
+            effective_mode = mode_resolution["effective_mode"]
+            if effective_mode is not None and effective_mode != mode_state.get("active_mode"):
+                await state_repo.save_mode(user_id, active_mode=effective_mode)
+                mode_state["active_mode"] = effective_mode
+        else:
+            mode_resolution = self._resolve_requested_mode(
+                message=message,
+                metadata=metadata,
+                active_mode=None,
+            )
+            effective_mode = None
+
+        self._alog.info(
+            turn_id,
+            "pipeline.mode",
+            active_mode=mode_state.get("active_mode"),
+            pending_mode=mode_state.get("pending_mode"),
+            pending_confirmation=mode_state.get("pending_confirmation"),
+            requested_mode=mode_resolution.get("requested_mode"),
+            effective_mode=effective_mode,
+        )
+
         # ── 4b. Guided provider-registration shortcut ─────────────────────
-        registration_response = (
-            await self._provider_registration.maybe_handle_registration(
+        if effective_mode == MODE_PROVIDER_SEARCH:
+            location_update_response = await self._provider_search.maybe_handle_location_update(
                 user_id=user_id,
                 message=message,
                 deps=deps,
@@ -194,10 +273,74 @@ class AIOrchestrator:
                 metadata=metadata,
                 turn_id=turn_id,
             )
-        )
+            if location_update_response is not None:
+                if state_repo is not None:
+                    await state_repo.save_mode(
+                        user_id,
+                        active_mode=MODE_PROVIDER_SEARCH,
+                    )
+                if context.conversation_id is not None:
+                    await memory_service.process_interaction(
+                        user_id=usuario_id,
+                        user_message=message,
+                        assistant_response=location_update_response.message,
+                        conversation_id=context.conversation_id,
+                        intent=location_update_response.intent.value,
+                    )
+                await db.commit()
+                return self._to_orchestrator_response(
+                    location_update_response,
+                    source="shortcut",
+                )
+
+            guided_search_response = await self._provider_search.maybe_handle_guided_search(
+                user_id=user_id,
+                message=message,
+                metadata=metadata,
+                deps=deps,
+                memory_service=memory_service,
+                memories=memories,
+                turn_id=turn_id,
+            )
+            if guided_search_response is not None:
+                if state_repo is not None:
+                    await state_repo.save_mode(
+                        user_id,
+                        active_mode=MODE_PROVIDER_SEARCH,
+                    )
+                if context.conversation_id is not None:
+                    await memory_service.process_interaction(
+                        user_id=usuario_id,
+                        user_message=message,
+                        assistant_response=guided_search_response.message,
+                        conversation_id=context.conversation_id,
+                        intent=guided_search_response.intent.value,
+                    )
+                await db.commit()
+                return self._to_orchestrator_response(
+                    guided_search_response,
+                    source="shortcut",
+                )
+
+        registration_response = None
+        if effective_mode == MODE_PROVIDER_PROFILE:
+            registration_response = await self._provider_registration.maybe_handle_registration(
+                user_id=user_id,
+                message=message,
+                deps=deps,
+                memory_service=memory_service,
+                metadata=metadata,
+                turn_id=turn_id,
+            )
         if registration_response is not None:
+            if state_repo is not None:
+                await state_repo.save_mode(
+                    user_id,
+                    active_mode=MODE_PROVIDER_PROFILE,
+                )
             self._alog.info(
-                turn_id, "pipeline.shortcut",
+                turn_id,
+                "pipeline.shortcut",
                 intent=registration_response.intent.value,
                 response_preview=registration_response.message[:120],
                 elapsed_ms=(time.monotonic() - _start) * 1000,
@@ -216,19 +359,57 @@ class AIOrchestrator:
                 source="shortcut",
             )
 
+        profile_update_response = None
+        if effective_mode == MODE_PROVIDER_PROFILE:
+            profile_update_response = await self._provider_profile.maybe_handle_profile_update(
+                user_id=user_id,
+                message=message,
+                metadata=metadata,
+                deps=deps,
+                turn_id=turn_id,
+            )
+        if profile_update_response is not None:
+            if state_repo is not None:
+                await state_repo.save_mode(
+                    user_id,
+                    active_mode=MODE_PROVIDER_PROFILE,
+                )
+            if context.conversation_id is not None:
+                await memory_service.process_interaction(
+                    user_id=usuario_id,
+                    user_message=message,
+                    assistant_response=profile_update_response.message,
+                    conversation_id=context.conversation_id,
+                    intent=profile_update_response.intent.value,
+                )
+            await db.commit()
+            return self._to_orchestrator_response(
+                profile_update_response,
+                source="shortcut",
+            )
+
         # ── 5. Run agent ──────────────────────────────────────────────────
         system_context = context.to_system_context()
-        user_prompt = self._build_user_prompt(message, system_context, metadata)
+        prompt_metadata = dict(metadata or {})
+        if effective_mode is not None:
+            prompt_metadata["active_mode"] = effective_mode
+        llm_agent, agent_name = self._select_llm_agent(effective_mode)
+        prompt_metadata["agent_name"] = agent_name
+        deps.current_message_metadata = prompt_metadata
+        user_prompt = self._build_user_prompt(message, system_context, prompt_metadata)
 
         self._alog.info(
-            turn_id, "agent.run",
+            turn_id,
+            "agent.run",
+            agent_name=agent_name,
+            active_mode=effective_mode,
             model=self._settings.openai_model,
             user_prompt_length=len(user_prompt),
             user_prompt_preview=user_prompt[:300],
         )
 
         try:
-            result = await router_agent.run(
+            result = await llm_agent.run(
                 user_prompt,
                 deps=deps,
                 model=f"openai-chat:{self._settings.openai_model}",
@@ -238,7 +419,9 @@ class AIOrchestrator:
                 result.new_messages()
             )
             self._alog.info(
-                turn_id, "agent.result",
+                turn_id,
+                "agent.result",
+                agent_name=agent_name,
                 intent=agent_response.intent.value,
                 confidence=agent_response.confidence,
                 requires_action=agent_response.requires_action,
@@ -249,7 +432,8 @@ class AIOrchestrator:
         except Exception as exc:
             logger.exception("Agent run failed for user %s: %s", user_id, exc)
             self._alog.error(
-                turn_id, "agent.error",
+                turn_id,
+                "agent.error",
                 exception=str(exc),
                 elapsed_ms=(time.monotonic() - _start) * 1000,
             )
@@ -293,7 +477,9 @@ class AIOrchestrator:
                 location["ciudad"] = ciudad
             if location:
                 await self._provider_search.persist_search_location(
-                    memory_service, usuario_id, location,
+                    memory_service,
+                    usuario_id,
+                    location,
                 )
 
         if agent_response.intent == Intent.BUSCAR_SERVICIO and agent_response.entities:
@@ -307,14 +493,23 @@ class AIOrchestrator:
                 location["ciudad"] = ciudad
             if location:
                 await self._provider_search.persist_search_location(
-                    memory_service, usuario_id, location,
+                    memory_service,
+                    usuario_id,
+                    location,
                 )
             # Persist rubro so future conversations know what the user last searched
             rubro = search_entities.get("rubro")
             if isinstance(rubro, str) and rubro:
                 await memory_service.upsert_memory(
-                    usuario_id, "rubro", rubro, importance=0.8,
+                    usuario_id,
+                    "rubro",
+                    rubro,
+                    importance=0.8,
                 )
+
+        inferred_mode = self._mode_from_agent_intent(agent_response.intent)
+        if inferred_mode is not None and state_repo is not None:
+            await state_repo.save_mode(user_id, active_mode=inferred_mode)
 
         # ── 8. Persist ────────────────────────────────────────────────────
         try:
@@ -329,14 +524,16 @@ class AIOrchestrator:
 
             await db.commit()
             self._alog.info(
-                turn_id, "pipeline.persisted",
+                turn_id,
+                "pipeline.persisted",
                 conversation_id=context.conversation_id,
                 elapsed_ms=(time.monotonic() - _start) * 1000,
             )
         except Exception as exc:
             logger.exception("Post-processing failed for user %s: %s", user_id, exc)
             self._alog.error(
-                turn_id, "pipeline.persist_error",
+                turn_id,
+                "pipeline.persist_error",
                 exception=str(exc),
             )
             await self._rollback_quietly(db, user_id, "post-processing failure")
@@ -402,6 +599,13 @@ class AIOrchestrator:
             db_lock=db_lock,
         )
 
+    @staticmethod
+    def _build_state_repo(db: AsyncSession) -> EstadoRepository | None:
+        """Return a state repository only when the session supports SQL reads."""
+        if not hasattr(db, "execute"):
+            return None
+        return EstadoRepository(db)
+
     async def _answer_system_question(
         self,
         *,
@@ -459,6 +663,208 @@ class AIOrchestrator:
             sections.append(f"## Metadata del mensaje\n{metadata}")
         sections.append(f"Mensaje actual del usuario: {message}")
         return "\n\n---\n".join(sections)
+
+    @staticmethod
+    def _select_llm_agent(
+        effective_mode: str | None,
+    ) -> tuple[Any, str]:
+        """Choose the specialized agent that matches the current top-level mode."""
+        default_agent = AIOrchestrator._agent_with_run(
+            getattr(router_agents, "provider_search_agent", None),
+            router_agent,
+        )
+        if effective_mode == MODE_PROVIDER_PROFILE:
+            return (
+                AIOrchestrator._agent_with_run(
+                    getattr(router_agents, "provider_profile_agent", None),
+                    default_agent,
+                ),
+                "provider_profile_agent",
+            )
+        if effective_mode == MODE_PROVIDER_SEARCH:
+            return (
+                AIOrchestrator._agent_with_run(
+                    getattr(router_agents, "provider_search_agent", None),
+                    default_agent,
+                ),
+                "provider_search_agent",
+            )
+        return default_agent, "provider_search_agent"
+
+    @staticmethod
+    def _agent_with_run(preferred: Any, fallback: Any) -> Any:
+        """Return the first agent-like object that exposes an async run method."""
+        if hasattr(preferred, "run"):
+            return preferred
+        return fallback
+
+    @staticmethod
+    def _mode_from_agent_intent(intent: Intent) -> str | None:
+        """Map agent-level intents back to the sticky top-level chat mode."""
+        if intent in {
+            Intent.REGISTRAR_PRESTADOR,
+            Intent.ACTUALIZAR_PERFIL,
+        }:
+            return MODE_PROVIDER_PROFILE
+        if intent in {
+            Intent.BUSCAR_SERVICIO,
+            Intent.ACTUALIZAR_UBICACION,
+        }:
+            return MODE_PROVIDER_SEARCH
+        return None
+
+    def _resolve_requested_mode(
+        self,
+        *,
+        message: str,
+        metadata: dict[str, Any] | None,
+        active_mode: str | None,
+    ) -> dict[str, str | None]:
+        """Infer whether this turn explicitly targets one of the two top-level modes."""
+        requested_mode = None
+        metadata_mode = None
+        if metadata:
+            raw_mode = metadata.get("requested_mode")
+            if raw_mode in {MODE_PROVIDER_PROFILE, MODE_PROVIDER_SEARCH}:
+                metadata_mode = raw_mode
+
+        if metadata_mode is not None:
+            requested_mode = metadata_mode
+        elif ProviderRegistrationService._is_registration_start(message, metadata):
+            requested_mode = MODE_PROVIDER_PROFILE
+        elif ProviderSearchService._is_search_start(message, metadata):
+            requested_mode = MODE_PROVIDER_SEARCH
+        elif ProviderSearchService._extract_location_update(message) is not None:
+            requested_mode = MODE_PROVIDER_SEARCH
+
+        effective_mode = active_mode
+        if effective_mode is None:
+            effective_mode = requested_mode
+
+        return {
+            "requested_mode": requested_mode,
+            "effective_mode": effective_mode,
+        }
+
+    async def _maybe_handle_mode_confirmation(
+        self,
+        *,
+        state_repo: EstadoRepository,
+        user_id: str,
+        message: str,
+        mode_state: dict[str, Any],
+        requested_mode: str | None,
+    ) -> AgentResponse | None:
+        """Ask for confirmation before leaving the current sticky top-level mode."""
+        active_mode = mode_state.get("active_mode")
+        pending_mode = mode_state.get("pending_mode")
+        pending_confirmation = bool(mode_state.get("pending_confirmation"))
+        normalized = message.strip().lower()
+
+        if pending_confirmation and isinstance(pending_mode, str):
+            if normalized in MODE_SWITCH_CONFIRM_YES:
+                await state_repo.save_mode(user_id, active_mode=pending_mode)
+                return self._build_mode_changed_response(pending_mode)
+            if normalized in MODE_SWITCH_CONFIRM_NO:
+                await state_repo.clear_pending_mode(user_id)
+                return self._build_mode_kept_response(active_mode)
+            return self._build_mode_confirmation_response(
+                current_mode=active_mode,
+                target_mode=pending_mode,
+            )
+
+        if active_mode is not None and requested_mode is not None and requested_mode != active_mode:
+            await state_repo.request_mode_switch(
+                user_id,
+                active_mode=active_mode,
+                pending_mode=requested_mode,
+            )
+            return self._build_mode_confirmation_response(
+                current_mode=active_mode,
+                target_mode=requested_mode,
+            )
+
+        return None
+
+    @staticmethod
+    def _build_mode_confirmation_response(
+        *,
+        current_mode: str | None,
+        target_mode: str,
+    ) -> AgentResponse:
+        """Create the SI/NO confirmation message used when switching modes."""
+        current_label = AIOrchestrator._mode_label(current_mode)
+        target_label = AIOrchestrator._mode_label(target_mode)
+        return AgentResponse(
+            intent=Intent.AYUDA,
+            message=(
+                f"Ahora estás en modo {current_label}. " f"¿Querés cambiar a modo {target_label}?"
+            ),
+            confidence=1.0,
+            requires_action=False,
+            metadata={
+                "mode_switch": {
+                    "current_mode": current_mode,
+                    "target_mode": target_mode,
+                    "status": "pending_confirmation",
+                }
+            },
+            messages=[
+                Message(
+                    text="Respondé SI o NO para confirmar el cambio.",
+                    action=MessageAction(
+                        type="reply_buttons",
+                        buttons=[
+                            ReplyButton(id="mode_switch_yes", title="SI"),
+                            ReplyButton(id="mode_switch_no", title="NO"),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+    @staticmethod
+    def _build_mode_changed_response(target_mode: str) -> AgentResponse:
+        """Acknowledge a confirmed mode change and preserve inactive substate."""
+        target_label = AIOrchestrator._mode_label(target_mode)
+        return AgentResponse(
+            intent=Intent.AYUDA,
+            message=(f"Listo, cambié al modo {target_label}. " "Seguimos por ahí."),
+            confidence=1.0,
+            requires_action=False,
+            metadata={
+                "mode_switch": {
+                    "target_mode": target_mode,
+                    "status": "confirmed",
+                }
+            },
+        )
+
+    @staticmethod
+    def _build_mode_kept_response(active_mode: str | None) -> AgentResponse:
+        """Acknowledge that the user rejected the proposed mode switch."""
+        active_label = AIOrchestrator._mode_label(active_mode)
+        return AgentResponse(
+            intent=Intent.AYUDA,
+            message=(f"Perfecto, seguimos en modo {active_label}."),
+            confidence=1.0,
+            requires_action=False,
+            metadata={
+                "mode_switch": {
+                    "active_mode": active_mode,
+                    "status": "rejected",
+                }
+            },
+        )
+
+    @staticmethod
+    def _mode_label(mode: str | None) -> str:
+        """Render short human labels for the two top-level modes."""
+        if mode == MODE_PROVIDER_PROFILE:
+            return "perfil de prestador"
+        if mode == MODE_PROVIDER_SEARCH:
+            return "búsqueda de servicios"
+        return "actual"
 
     # ── Old helper methods ─────────────────────────────────────────────────
     # These have been migrated to ProviderSearchService but kept as thin

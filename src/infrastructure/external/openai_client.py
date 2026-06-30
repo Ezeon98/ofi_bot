@@ -96,11 +96,7 @@ class OpenAIClientWithFallback:
         """Execute one OpenAI request, retrying with the next key on auth/quota errors."""
         client_indexes = [
             self._active_index,
-            *[
-                index
-                for index in range(len(self._clients))
-                if index != self._active_index
-            ],
+            *[index for index in range(len(self._clients)) if index != self._active_index],
         ]
         last_exc: Exception | None = None
 
@@ -108,9 +104,7 @@ class OpenAIClientWithFallback:
             try:
                 result = await self._invoke(client_index, path, *args, **kwargs)
                 if self._active_index != client_index:
-                    logger.warning(
-                        "OpenAI API key fallback activated; using secondary key"
-                    )
+                    logger.warning("OpenAI API key fallback activated; using secondary key")
                     self._active_index = client_index
                 return result
             except Exception as exc:
@@ -119,9 +113,7 @@ class OpenAIClientWithFallback:
                 last_exc = exc
                 if position == len(client_indexes) - 1:
                     raise
-                logger.warning(
-                    "OpenAI API key failed auth/quota check; trying next configured key"
-                )
+                logger.warning("OpenAI API key failed auth/quota check; trying next configured key")
 
         if last_exc is not None:
             raise last_exc

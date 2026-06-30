@@ -70,7 +70,8 @@ async def procesar_texto(
         len(response.message),
     )
     _alog.info(
-        "", "router.response",
+        "",
+        "router.response",
         user_id=sender,
         source=response.source,
         intent=response.intent,

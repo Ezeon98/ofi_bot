@@ -45,12 +45,7 @@ def _build_card_body(card: dict[str, object]) -> str:
         if card["national"]
         else "⌛ Antecedentes nacionales pendientes."
     )
-    return (
-        f"👤 {card['name']}\n"
-        f"🏅 {card['status']}\n"
-        f"{provincial}\n"
-        f"{national}"
-    )
+    return f"👤 {card['name']}\n" f"🏅 {card['status']}\n" f"{provincial}\n" f"{national}"
 
 
 def _build_contact_url(card: dict[str, object]) -> str:

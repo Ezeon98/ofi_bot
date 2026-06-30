@@ -23,9 +23,11 @@ from src.presentation.api.subscriptions import router as subscriptions_router
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+
 # ── Logging setup ─────────────────────────────────────────────────────────────
 class _ConditionalFormatter(logging.Formatter):
     """Show module name only on ERROR and CRITICAL; hide it on INFO/WARNING/DEBUG."""
+
     _BASE_FMT = "%(asctime)s  | %(message)s"
     _ERROR_FMT = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
 
@@ -35,6 +37,7 @@ class _ConditionalFormatter(logging.Formatter):
         else:
             self._style._fmt = self._BASE_FMT
         return super().format(record)
+
 
 logging.basicConfig(
     level=logging.INFO,

@@ -34,9 +34,7 @@ class UsuarioRepository:
 
     async def get_by_bsuid(self, bsuid: str):
         """Look up a user by their Business-Scoped User ID."""
-        result = await self._s.execute(
-            select(UsuarioModel).where(UsuarioModel.bsuid == bsuid)
-        )
+        result = await self._s.execute(select(UsuarioModel).where(UsuarioModel.bsuid == bsuid))
         return result.scalar_one_or_none()
 
     async def resolve_sender(self, telefono: str, bsuid: str | None = None):
@@ -44,9 +42,7 @@ class UsuarioRepository:
         usuario = await self.get(telefono)
         if usuario and bsuid and not getattr(usuario, "bsuid", None):
             await self._s.execute(
-                update(UsuarioModel)
-                .where(UsuarioModel.id == usuario.id)
-                .values(bsuid=bsuid)
+                update(UsuarioModel).where(UsuarioModel.id == usuario.id).values(bsuid=bsuid)
             )
         if not usuario and bsuid:
             usuario = await self.get_by_bsuid(bsuid)

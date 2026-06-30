@@ -42,7 +42,14 @@ async def consultar_estado_busqueda(
     async with db_access_lock(ctx.deps):
         state = await EstadoRepository(ctx.deps.db).get(ctx.deps.user_id)
     if state.get("estado") != SEARCH_STATE_NAME:
-        return {"activo": False, "paso": None, "rubro": None, "barrio": None, "ciudad": None, "detalle": None}
+        return {
+            "activo": False,
+            "paso": None,
+            "rubro": None,
+            "barrio": None,
+            "ciudad": None,
+            "detalle": None,
+        }
 
     return {
         "activo": True,

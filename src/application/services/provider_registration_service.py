@@ -22,7 +22,6 @@ from src.memory.service import MemoryService
 from src.tools.business.providers import CrearPrestadorInput, crear_prestador
 from src.utils.geocoding import geocode_text_location
 
-
 logger = logging.getLogger(__name__)
 
 REGISTRATION_STATE_NAME = "provider_registration"
@@ -88,9 +87,7 @@ class ProviderRegistrationService:
         """Handle provider-registration turns without invoking the LLM."""
         state_repo = EstadoRepository(deps.db)
         raw_state = await state_repo.get(user_id)
-        state = (
-            raw_state if raw_state.get("estado") == REGISTRATION_STATE_NAME else {}
-        )
+        state = raw_state if raw_state.get("estado") == REGISTRATION_STATE_NAME else {}
         paso = state.get("paso")
 
         self._log(
@@ -394,7 +391,7 @@ class ProviderRegistrationService:
         normalized = ProviderRegistrationService._normalize_message(message)
         for prefix in prefixes:
             if normalized.startswith(prefix):
-                return message[len(prefix):].strip()
+                return message[len(prefix) :].strip()
         return message.strip()
 
     @staticmethod
@@ -443,10 +440,7 @@ class ProviderRegistrationService:
     @staticmethod
     def _build_name_request_response(retry: bool = False) -> AgentResponse:
         """Ask for the provider name."""
-        message = (
-            "Para registrarte como prestador necesito tu nombre. "
-            "¿Cómo te llamás?"
-        )
+        message = "Para registrarte como prestador necesito tu nombre. " "¿Cómo te llamás?"
         if retry:
             message = "Necesito tu nombre para seguir con el registro. ¿Cómo te llamás?"
         return AgentResponse(

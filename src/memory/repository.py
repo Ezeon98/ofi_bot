@@ -44,7 +44,8 @@ class MemoryRepository:
             .where(
                 UserMemoryModel.user_id == user_id,
                 UserMemoryModel.importance >= min_importance,
-                (UserMemoryModel.expires_at == None) | (UserMemoryModel.expires_at > now),  # noqa: E711
+                (UserMemoryModel.expires_at == None)
+                | (UserMemoryModel.expires_at > now),  # noqa: E711
             )
             .order_by(UserMemoryModel.importance.desc())
             .limit(limit)
@@ -167,9 +168,7 @@ class ConversationRepository:
     async def count_turns(self, conversation_id: int) -> int:
         from sqlalchemy import func
 
-        stmt = select(func.count()).where(
-            ConversationTurnModel.conversation_id == conversation_id
-        )
+        stmt = select(func.count()).where(ConversationTurnModel.conversation_id == conversation_id)
         return await self._session.scalar(stmt) or 0
 
     async def update_summary(self, conversation_id: int, summary: str) -> None:
@@ -179,9 +178,7 @@ class ConversationRepository:
             .values(summary=summary)
         )
 
-    async def delete_turns_before_offset(
-        self, conversation_id: int, keep_last: int
-    ) -> None:
+    async def delete_turns_before_offset(self, conversation_id: int, keep_last: int) -> None:
         """Delete all turns except the most recent `keep_last`."""
         stmt = (
             select(ConversationTurnModel.id)
@@ -192,7 +189,5 @@ class ConversationRepository:
         ids_to_drop = list(await self._session.scalars(stmt))
         if ids_to_drop:
             await self._session.execute(
-                delete(ConversationTurnModel).where(
-                    ConversationTurnModel.id.in_(ids_to_drop)
-                )
+                delete(ConversationTurnModel).where(ConversationTurnModel.id.in_(ids_to_drop))
             )

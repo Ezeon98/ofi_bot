@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-
 _SYSTEM_FALLBACK_PROMPT = """\
 Sos el agente documental de MiOficio.
 
@@ -49,19 +48,25 @@ class SystemFallbackService:
             self._knowledge_base,
         ]
         if system_context:
-            prompt_sections.extend([
-                "## Contexto conversacional",
-                system_context,
-            ])
+            prompt_sections.extend(
+                [
+                    "## Contexto conversacional",
+                    system_context,
+                ]
+            )
         if metadata:
-            prompt_sections.extend([
-                "## Metadata del mensaje",
-                str(metadata),
-            ])
-        prompt_sections.extend([
-            "## Pregunta del usuario",
-            question,
-        ])
+            prompt_sections.extend(
+                [
+                    "## Metadata del mensaje",
+                    str(metadata),
+                ]
+            )
+        prompt_sections.extend(
+            [
+                "## Pregunta del usuario",
+                question,
+            ]
+        )
 
         completion = await self._client.chat.completions.create(
             model=self._model,

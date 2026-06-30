@@ -41,13 +41,13 @@ class SchedulerEngine:
         }
 
         if definition.interval_seconds is not None:
-            self._scheduler.add_job(**kwargs, trigger="interval", seconds=definition.interval_seconds)
+            self._scheduler.add_job(
+                **kwargs, trigger="interval", seconds=definition.interval_seconds
+            )
         elif definition.cron is not None:
             self._scheduler.add_job(**kwargs, trigger="cron", **self._parse_cron(definition.cron))
         else:
-            logger.warning(
-                "Skipping task %s: neither interval nor cron provided", definition.name
-            )
+            logger.warning("Skipping task %s: neither interval nor cron provided", definition.name)
 
     @staticmethod
     def _parse_cron(cron: str) -> dict[str, str]:

@@ -121,7 +121,9 @@ async def buscar_prestadores(
 
     logger.info(
         "PROVIDER_ORIGIN user=%s origin_lat=%r origin_lon=%r",
-        user_id, origin_lat, origin_lon,
+        user_id,
+        origin_lat,
+        origin_lon,
     )
 
     async with db_access_lock(ctx.deps):
@@ -172,25 +174,21 @@ async def buscar_prestadores(
                 _related_rubro_suggestions(effective_params.rubro),
             )
             stmt = stmt.where(
-                ProviderModel.rubros.like(
-                    _legacy_rubro_json_pattern(rubro_filters[0])
-                )
+                ProviderModel.rubros.like(_legacy_rubro_json_pattern(rubro_filters[0]))
             )
 
-        stmt = (
-            stmt.order_by(
-                ProviderModel.badge_activo.desc(),
-                ProviderModel.plan.desc(),
-            )
-            .limit(max(effective_params.limit * 3, 15))
-        )
+        stmt = stmt.order_by(
+            ProviderModel.badge_activo.desc(),
+            ProviderModel.plan.desc(),
+        ).limit(max(effective_params.limit * 3, 15))
 
         rows = list(await ctx.deps.db.execute(stmt))
         provider_rows = [r[0] for r in rows]
         telefono_map = {r[0].id: r[1] for r in rows}
     logger.info(
         "PROVIDER_RAW user=%s raw_count=%d",
-        user_id, len(rows),
+        user_id,
+        len(rows),
     )
 
     results = []
@@ -225,7 +223,9 @@ async def buscar_prestadores(
     final = results[: effective_params.limit]
     logger.info(
         "PROVIDER_RESULT user=%s final_count=%d names=%r",
-        user_id, len(final), [r["nombre"] for r in final],
+        user_id,
+        len(final),
+        [r["nombre"] for r in final],
     )
     return final
 
@@ -247,9 +247,7 @@ async def crear_prestador(
 
         # Prevent duplicates
         existing = await ctx.deps.db.scalar(
-            sa_select(ProviderModel).where(
-                ProviderModel.usuario_id == usuario_id
-            )
+            sa_select(ProviderModel).where(ProviderModel.usuario_id == usuario_id)
         )
         if existing:
             return {
@@ -307,9 +305,7 @@ async def actualizar_prestador(
         except ValueError:
             return {"error": "El campo max_distance_km debe ser un número."}
         if value <= 0:
-            return {
-                "error": "El campo max_distance_km debe ser mayor a cero."
-            }
+            return {"error": "El campo max_distance_km debe ser mayor a cero."}
 
     async with db_access_lock(ctx.deps):
         usuario_id = await _resolve_usuario_id(ctx.deps.db, ctx.deps.user_id)
@@ -476,9 +472,7 @@ def _related_rubro_suggestions(rubro: str | None, limit: int = 4) -> list[str]:
     if not canonical:
         return []
     return [
-        item
-        for item in related_canonical_rubros(canonical, limit=limit + 1)
-        if item != canonical
+        item for item in related_canonical_rubros(canonical, limit=limit + 1) if item != canonical
     ][:limit]
 
 
@@ -537,8 +531,7 @@ def _sanitize_search_params(
     effective_limit = min(params.limit, 15)
     if (
         rubro == params.rubro
-        and
-        barrio == params.barrio
+        and barrio == params.barrio
         and ciudad == params.ciudad
         and effective_limit == params.limit
     ):
@@ -587,7 +580,7 @@ def _sanitize_location_field(
         return location_fragment.title()
 
     if normalized_rubro and normalized_value.startswith(normalized_rubro):
-        remainder = normalized_value[len(normalized_rubro):].strip(" ,.-")
+        remainder = normalized_value[len(normalized_rubro) :].strip(" ,.-")
         if remainder:
             return remainder.title()
 

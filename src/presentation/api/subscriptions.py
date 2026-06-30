@@ -55,11 +55,13 @@ def _parse_mp_datetime(value: str | None) -> datetime | None:
 
 # -- Dependencies ----------------------------------------------------
 
+
 async def _get_uow(session: AsyncSession = Depends(get_session)) -> UnitOfWork:
     return UnitOfWork(session)
 
 
 # -- MP public key for frontend SDK -----------------------------------
+
 
 @router.get("/api/subscriptions/config")
 async def get_config() -> dict[str, str]:
@@ -68,12 +70,14 @@ async def get_config() -> dict[str, str]:
 
 # -- Plan listing -----------------------------------------------------
 
+
 @router.get("/api/subscriptions/plans")
 async def list_plans() -> list[dict[str, Any]]:
     return get_available_plans()
 
 
 # -- Create subscription via card token --------------------------------
+
 
 class _CreateSubscriptionBody(BaseModel):
     card_token_id: str
@@ -99,7 +103,10 @@ async def create_subscription_endpoint(
         logger.error("MP preapproval error: %s %s", exc.response.status_code, exc.response.text)
         return JSONResponse(
             status_code=502,
-            content={"status": "error", "detail": "No se pudo crear la suscripción en MercadoPago."},
+            content={
+                "status": "error",
+                "detail": "No se pudo crear la suscripción en MercadoPago.",
+            },
         )
     except ValueError as exc:
         logger.error("MP config error: %s", exc)
@@ -113,6 +120,7 @@ async def create_subscription_endpoint(
 
 
 # -- Subscription status ----------------------------------------------
+
 
 @router.get("/api/subscriptions/{subscription_id}/status", response_model=None)
 async def api_subscription_status(
@@ -146,6 +154,7 @@ async def api_subscription_status(
 
 
 # -- MercadoPago webhook ----------------------------------------------
+
 
 @router.post("/mp_webhook", response_model=None)
 async def mp_webhook(
@@ -186,6 +195,7 @@ async def mp_webhook(
 
 # -- Webhook handlers -------------------------------------------------
 
+
 async def _handle_subscription_update(uow: UnitOfWork, preapproval_id: str) -> None:
     """Process subscription_preapproval event."""
     if not preapproval_id:
@@ -215,7 +225,9 @@ async def _handle_subscription_update(uow: UnitOfWork, preapproval_id: str) -> N
         if user_id and not existing.user_id:
             await uow.mp_subscriptions.link_user(preapproval_id, user_id)
         if next_pay:
-            await uow.mp_subscriptions.update_payment_dates(preapproval_id, next_payment_date=next_pay)
+            await uow.mp_subscriptions.update_payment_dates(
+                preapproval_id, next_payment_date=next_pay
+            )
         logger.info("Subscription %s updated: status=%s", preapproval_id, mp_status)
     else:
         plan_type = resolve_plan_type(
@@ -357,10 +369,13 @@ async def _handle_payment_notification(uow: UnitOfWork, payment_id: str) -> None
 
     payment_date = _parse_mp_datetime(data.get("date_approved") or data.get("date_created", ""))
     if payment_date:
-        await uow.mp_subscriptions.update_payment_dates(preapproval_id, last_payment_date=payment_date)
+        await uow.mp_subscriptions.update_payment_dates(
+            preapproval_id, last_payment_date=payment_date
+        )
 
 
 # -- Webhook signature validation -------------------------------------
+
 
 def _validate_webhook_signature(request: Request, data_id: str | None) -> bool:
     x_signature = request.headers.get("x-signature", "")

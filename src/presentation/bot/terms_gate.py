@@ -16,10 +16,7 @@ from src.infrastructure.external.whatsapp_client import (
 logger = logging.getLogger(__name__)
 
 TERMS_FILE_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "static"
-    / "legal"
-    / "mioficio-terminos-y-condiciones.pdf"
+    Path(__file__).resolve().parents[3] / "static" / "legal" / "mioficio-terminos-y-condiciones.pdf"
 )
 TERMS_ACCEPT_BUTTON_ID = "terms_accept"
 TERMS_REJECT_BUTTON_ID = "terms_reject"

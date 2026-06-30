@@ -42,7 +42,8 @@ _AI_EXTRACT_SYSTEM = (
     "Dado un mensaje del usuario, devolvé ÚNICAMENTE un JSON con dos campos:\n"
     '  "rubro": el servicio solicitado, elegido de esta lista exacta: ' + _RUBROS_FOR_PROMPT + ".\n"
     '  "zona": el barrio, localidad o ciudad mencionado, o null si no hay.\n'
-    "Si el servicio no coincide con ninguno de la lista, elegí el más cercano semánticamente.\n"
+    "Si el mensaje no pide ni describe un servicio, devolvé rubro=null.\n"
+    "Si el servicio no coincide con ninguno de la lista pero sí describe una necesidad real, elegí el más cercano semánticamente.\n"
     "No incluyas texto fuera del JSON."
 )
 
@@ -180,7 +181,8 @@ class ProviderSearchService:
         await state_repo.delete(user_id)
 
         self._log(
-            turn_id, "location_update.persisted",
+            turn_id,
+            "location_update.persisted",
             barrio=location.get("barrio"),
             ciudad=location.get("ciudad"),
             lat=location.get("lat"),
@@ -225,7 +227,8 @@ class ProviderSearchService:
 
         paso = state.get("paso")
         self._log(
-            turn_id, "guided_search.state",
+            turn_id,
+            "guided_search.state",
             paso=paso,
             has_current_location=current_location is not None,
             has_stored_location=stored_location is not None,
@@ -235,9 +238,16 @@ class ProviderSearchService:
 
         if paso == "awaiting_need":
             ai_rubro, ai_zone = await self._ai_extract_rubro_and_zone(message)
-            rubro = ai_rubro or self._extract_search_need(message, allow_plain=True)
+            rubro = ai_rubro
             if rubro is None:
-                self._log(turn_id, "guided_search.awaiting_need.no_match", message_preview=message[:80])
+                fallback_rubro = self._extract_search_need(message, allow_plain=True)
+                canonical_fallback = resolve_canonical_rubro(fallback_rubro)
+                if canonical_fallback in CANONICAL_RUBROS:
+                    rubro = fallback_rubro
+            if rubro is None:
+                self._log(
+                    turn_id, "guided_search.awaiting_need.no_match", message_preview=message[:80]
+                )
                 return None
             inline_zone = ai_zone or self._extract_inline_zone(message)
             if current_location is None and inline_zone is not None:
@@ -268,7 +278,12 @@ class ProviderSearchService:
                 self._log(turn_id, "guided_search.awaiting_need.need_zone", rubro=rubro)
                 await self._save_search_state(state_repo, user_id, "awaiting_zone", rubro)
                 return self._build_location_request_response(rubro)
-            self._log(turn_id, "guided_search.awaiting_need.search_ready", rubro=rubro, location=self._location_label(search_location))
+            self._log(
+                turn_id,
+                "guided_search.awaiting_need.search_ready",
+                rubro=rubro,
+                location=self._location_label(search_location),
+            )
             return await self._build_search_results_response(
                 turn_id=turn_id,
                 deps=deps,
@@ -280,16 +295,19 @@ class ProviderSearchService:
 
         if paso == "awaiting_zone" and state.get("rubro"):
             rubro = str(state["rubro"])
-            typed_zone = self._extract_zone_reply(message)
+            _, ai_zone = await self._ai_extract_rubro_and_zone(message)
+            typed_zone = ai_zone or await self._infer_zone_reply(message)
             if current_location is not None:
                 search_location = current_location
                 self._log(turn_id, "guided_search.awaiting_zone.from_metadata", rubro=rubro)
             elif typed_zone:
                 search_location = {"barrio": typed_zone}
-                self._log(turn_id, "guided_search.awaiting_zone.from_text", rubro=rubro, typed_zone=typed_zone)
-            elif stored_location is not None:
-                search_location = stored_location
-                self._log(turn_id, "guided_search.awaiting_zone.from_memory", rubro=rubro)
+                self._log(
+                    turn_id,
+                    "guided_search.awaiting_zone.from_text",
+                    rubro=rubro,
+                    typed_zone=typed_zone,
+                )
             else:
                 self._log(turn_id, "guided_search.awaiting_zone.no_zone_found", rubro=rubro)
                 return None
@@ -368,7 +386,12 @@ class ProviderSearchService:
                     typed_zone=inline_zone,
                 )
 
-        self._log(turn_id, "guided_search.fresh.search_ready", rubro=rubro, location=self._location_label(search_location))
+        self._log(
+            turn_id,
+            "guided_search.fresh.search_ready",
+            rubro=rubro,
+            location=self._location_label(search_location),
+        )
         return await self._build_search_results_response(
             turn_id=turn_id,
             deps=deps,
@@ -402,12 +425,21 @@ class ProviderSearchService:
         metadata["providers"] = effective_providers
         agent_response.metadata = metadata
 
-        effective_rubro = rubro or (agent_response.entities.get("rubro") if agent_response.entities else None) or "prestadores"
-        location_label = (agent_response.entities.get("barrio") if agent_response.entities else None) or \
-            (agent_response.entities.get("ciudad") if agent_response.entities else None) or "tu ubicación"
+        effective_rubro = (
+            rubro
+            or (agent_response.entities.get("rubro") if agent_response.entities else None)
+            or "prestadores"
+        )
+        location_label = (
+            (agent_response.entities.get("barrio") if agent_response.entities else None)
+            or (agent_response.entities.get("ciudad") if agent_response.entities else None)
+            or "tu ubicación"
+        )
 
         first_message, messages = ProviderSearchService._format_provider_results(
-            effective_rubro, location_label, effective_providers,
+            effective_rubro,
+            location_label,
+            effective_providers,
         )
 
         # Keep the original message as the first message, add provider messages
@@ -446,9 +478,7 @@ class ProviderSearchService:
 
                 for provider in content:
                     provider_key = str(
-                        provider.get("telefono")
-                        or provider.get("nombre")
-                        or provider
+                        provider.get("telefono") or provider.get("nombre") or provider
                     )
                     if provider_key in seen:
                         continue
@@ -513,14 +543,18 @@ class ProviderSearchService:
         self._log(
             turn_id,
             "shortcut.search_run",
-            rubro=rubro, barrio=params.barrio, ciudad=params.ciudad,
-            lat=params.lat, lon=params.lon,
+            rubro=rubro,
+            barrio=params.barrio,
+            ciudad=params.ciudad,
+            lat=params.lat,
+            lon=params.lon,
         )
         providers = await buscar_prestadores(ctx, params)
         self._log(
             turn_id,
             "shortcut.search_result",
-            rubro=rubro, provider_count=len(providers),
+            rubro=rubro,
+            provider_count=len(providers),
             provider_names=[p.get("nombre") for p in providers[:5]],
         )
 
@@ -537,8 +571,12 @@ class ProviderSearchService:
                     "Si querés, probá con otra zona o con un rubro más amplio."
                 ),
                 confidence=1.0,
-                entities={"rubro": rubro, "barrio": location.get("barrio"),
-                          "ciudad": location.get("ciudad"), "detalle": detail},
+                entities={
+                    "rubro": rubro,
+                    "barrio": location.get("barrio"),
+                    "ciudad": location.get("ciudad"),
+                    "detalle": detail,
+                },
                 requires_action=True,
             )
 
@@ -546,7 +584,9 @@ class ProviderSearchService:
         current_page = providers[:PROVIDER_PAGE_SIZE]
         pending_providers = providers[PROVIDER_PAGE_SIZE:]
         first_message, messages = ProviderSearchService._format_provider_results(
-            rubro, location_label, current_page,
+            rubro,
+            location_label,
+            current_page,
         )
         if pending_providers:
             await self._save_search_state(
@@ -567,8 +607,12 @@ class ProviderSearchService:
             message=first_message,
             messages=messages,
             confidence=1.0,
-            entities={"rubro": rubro, "barrio": location.get("barrio"),
-                      "ciudad": location.get("ciudad"), "detalle": detail},
+            entities={
+                "rubro": rubro,
+                "barrio": location.get("barrio"),
+                "ciudad": location.get("ciudad"),
+                "detalle": detail,
+            },
             requires_action=True,
             metadata={"providers": current_page},
         )
@@ -708,7 +752,7 @@ class ProviderSearchService:
         zone_raw: str | None = None
         for prefix in LOCATION_UPDATE_PREFIXES:
             if normalized.startswith(prefix):
-                zone_raw = normalized[len(prefix):]
+                zone_raw = normalized[len(prefix) :]
                 break
         if zone_raw is None:
             return None
@@ -737,6 +781,8 @@ class ProviderSearchService:
 
         normalized = ProviderSearchService._normalize_message(message)
         if normalized in {
+            "quiero buscar un servicio",
+            "quiero buscar una servicio",
             "quiero buscar servicios",
             "busco servicios",
             "buscar servicios",
@@ -756,7 +802,7 @@ class ProviderSearchService:
         candidate = normalized
         for prefix in SEARCH_PREFIXES:
             if normalized.startswith(prefix):
-                candidate = normalized[len(prefix):]
+                candidate = normalized[len(prefix) :]
                 break
         else:
             if not allow_plain:
@@ -804,7 +850,7 @@ class ProviderSearchService:
         normalized = ProviderSearchService._normalize_message(message)
         for prefix in ZONE_REPLY_PREFIXES:
             if normalized.startswith(prefix):
-                normalized = normalized[len(prefix):]
+                normalized = normalized[len(prefix) :]
                 break
 
         if not normalized:
@@ -816,11 +862,31 @@ class ProviderSearchService:
         ):
             return None
 
-        zone = ProviderSearchService._extract_location_fragment(normalized) or ProviderSearchService._clean_zone_text(normalized)
+        zone = ProviderSearchService._extract_location_fragment(
+            normalized
+        ) or ProviderSearchService._clean_zone_text(normalized)
         words = zone.split()
         if not words or len(words) > 6:
             return None
         return zone
+
+    @staticmethod
+    async def _infer_zone_reply(message: str) -> str | None:
+        """Infer a usable zone reply and validate bare free text via geocoding."""
+        normalized = ProviderSearchService._normalize_message(message)
+        has_zone_prefix = any(normalized.startswith(prefix) for prefix in ZONE_REPLY_PREFIXES)
+        has_location_fragment = ProviderSearchService._extract_location_fragment(normalized) is not None
+
+        zone = ProviderSearchService._extract_zone_reply(message)
+        if zone is None:
+            return None
+        if has_zone_prefix or has_location_fragment:
+            return zone
+
+        geocoded = await geocode_text_location(zone)
+        if any(geocoded.get(field) is not None for field in ("barrio", "ciudad", "lat", "lon")):
+            return zone
+        return None
 
     @staticmethod
     def _extract_location_fragment(text: str) -> str | None:
@@ -843,7 +909,7 @@ class ProviderSearchService:
             lowered = zone.lower()
             for prefix in ZONE_NOISE_PREFIXES:
                 if lowered.startswith(prefix):
-                    zone = zone[len(prefix):].strip(" .,!?:;")
+                    zone = zone[len(prefix) :].strip(" .,!?:;")
                     break
             else:
                 return zone
@@ -903,10 +969,11 @@ class ProviderSearchService:
             return None
 
         pending_raw = state.get("pending_providers")
-        pending_providers = [
-            provider for provider in pending_raw
-            if isinstance(provider, dict)
-        ] if isinstance(pending_raw, list) else []
+        pending_providers = (
+            [provider for provider in pending_raw if isinstance(provider, dict)]
+            if isinstance(pending_raw, list)
+            else []
+        )
         if not pending_providers:
             await state_repo.delete(user_id)
             return AgentResponse(
@@ -1087,11 +1154,7 @@ class ProviderSearchService:
         if not location.get("ciudad") and geocoded.get("ciudad"):
             location["ciudad"] = geocoded["ciudad"]
 
-        if (
-            not location.get("barrio")
-            and not location.get("ciudad")
-            and geocoded.get("barrio")
-        ):
+        if not location.get("barrio") and not location.get("ciudad") and geocoded.get("barrio"):
             location["barrio"] = geocoded["barrio"]
 
         return location
@@ -1133,9 +1196,7 @@ class ProviderSearchService:
         except Exception:  # pragma: no cover — defensive, never fail search flow
             logger.debug("Agent logger failed for event %s", event, exc_info=True)
 
-    async def _ai_extract_rubro_and_zone(
-        self, message: str
-    ) -> tuple[str | None, str | None]:
+    async def _ai_extract_rubro_and_zone(self, message: str) -> tuple[str | None, str | None]:
         """Use the LLM to extract the canonical rubro and optional zone.
 
         Returns (rubro, zona) — either may be None if extraction fails.

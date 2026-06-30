@@ -60,9 +60,7 @@ class MercadoPagoSubscriptionRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_active_by_user(
-        self, user_id: int
-    ) -> Optional[MercadoPagoSubscriptionModel]:
+    async def get_active_by_user(self, user_id: int) -> Optional[MercadoPagoSubscriptionModel]:
         result = await self._s.execute(
             select(MercadoPagoSubscriptionModel)
             .where(

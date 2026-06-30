@@ -168,7 +168,8 @@ async def _handle_entries(uow: UnitOfWork, body: dict) -> None:
                 if not await check_rate_limit(sender):
                     logger.warning("Rate limit excedido para %s", sender)
                     await enviar_mensaje(
-                        sender, "⏳ Estás enviando mensajes muy rápido. Esperá un momento.",
+                        sender,
+                        "⏳ Estás enviando mensajes muy rápido. Esperá un momento.",
                     )
                     continue
 
@@ -242,15 +243,15 @@ async def _handle_entries(uow: UnitOfWork, body: dict) -> None:
                             elif int_type == "button_reply":
                                 btn_id = interactive["button_reply"]["id"]
                                 title = interactive["button_reply"].get("title", btn_id)
-                                synthetic_text = title
+                                requested_mode = None
                                 if btn_id == POST_TERMS_SEEK_SERVICES_BUTTON_ID:
-                                    synthetic_text = "Busco un servicio"
+                                    requested_mode = "provider_search"
                                 elif btn_id == POST_TERMS_OFFER_SERVICES_BUTTON_ID:
-                                    synthetic_text = "Quiero ofrecer mis servicios"
+                                    requested_mode = "provider_profile"
                                 await procesar_texto(
                                     uow,
                                     sender,
-                                    synthetic_text,
+                                    title,
                                     msg_id,
                                     metadata={
                                         "message_type": "interactive",
@@ -259,6 +260,12 @@ async def _handle_entries(uow: UnitOfWork, body: dict) -> None:
                                         "selected_title": title,
                                         "button_id": btn_id,
                                         "button_title": title,
+                                        "requested_mode": requested_mode,
+                                        "mode_source": (
+                                            "post_terms_button"
+                                            if requested_mode is not None
+                                            else None
+                                        ),
                                     },
                                 )
                         case "audio":

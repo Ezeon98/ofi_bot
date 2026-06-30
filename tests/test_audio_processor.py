@@ -127,3 +127,70 @@ class AudioProcessorTests(IsolatedAsyncioTestCase):
         transcribir_audio_mock.assert_not_awaited()
         enviar_mensaje_mock.assert_awaited_once()
         os_mock.remove.assert_called_once_with("tmp/audio.ogg")
+
+    async def test_post_terms_search_button_routes_requested_mode_metadata(self) -> None:
+        """The post-terms search button should pass explicit mode metadata."""
+        uow = SimpleNamespace(
+            usuarios=SimpleNamespace(
+                resolve_sender=AsyncMock(
+                    return_value=(
+                        "5491112345678",
+                        SimpleNamespace(accepted_terms_at="2026-01-01"),
+                    )
+                ),
+                touch_interaction=AsyncMock(),
+            )
+        )
+        body = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "messages": [
+                                    {
+                                        "from": "5491112345678",
+                                        "type": "interactive",
+                                        "id": "wamid-interactive-1",
+                                        "timestamp": "9999999999",
+                                        "interactive": {
+                                            "type": "button_reply",
+                                            "button_reply": {
+                                                "id": processor.POST_TERMS_SEEK_SERVICES_BUTTON_ID,
+                                                "title": "Buscar servicios",
+                                            },
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+        with (
+            patch.object(processor, "is_duplicate", return_value=False),
+            patch.object(processor, "is_old_message", return_value=False),
+            patch.object(processor, "check_rate_limit", new=AsyncMock(return_value=True)),
+            patch.object(processor, "handle_terms_gate", new=AsyncMock(return_value=False)),
+            patch.object(processor, "procesar_texto", new=AsyncMock()) as procesar_texto_mock,
+        ):
+            await processor._handle_entries(uow, body)
+
+        procesar_texto_mock.assert_awaited_once_with(
+            uow,
+            "5491112345678",
+            "Buscar servicios",
+            "wamid-interactive-1",
+            metadata={
+                "message_type": "interactive",
+                "interactive_type": "button_reply",
+                "selected_id": processor.POST_TERMS_SEEK_SERVICES_BUTTON_ID,
+                "selected_title": "Buscar servicios",
+                "button_id": processor.POST_TERMS_SEEK_SERVICES_BUTTON_ID,
+                "button_title": "Buscar servicios",
+                "requested_mode": "provider_search",
+                "mode_source": "post_terms_button",
+            },
+        )
