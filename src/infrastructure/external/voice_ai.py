@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import logging
-
-from openai import AsyncOpenAI
+from typing import Any
 
 from src.infrastructure.config import get_settings
+from src.infrastructure.external.openai_client import build_openai_client
 
 logger = logging.getLogger(__name__)
 
 _PROMPT = (
-    "Sos el motor de transcripcion de un bot de WhatsApp de ServiMatch/LaburaYA. "
+    "Sos el motor de transcripcion de un bot de WhatsApp de MiOficio. "
     "Transcribi en espanol rioplatense exactamente lo que diga la persona, "
     "priorizando rubros, zonas, direcciones, nombres, telefonos y pedidos de "
     "servicios como plomero, electricista, gasista, flete, limpieza o ninera. "
@@ -26,10 +26,10 @@ _PROMPT_FRAGMENTS = (
 )
 
 
-def _get_client() -> AsyncOpenAI:
+def _get_client() -> Any:
     """Build the OpenAI client used for audio transcription."""
     settings = get_settings()
-    return AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
+    return build_openai_client(settings)
 
 
 def _is_hallucinated_prompt(text: str) -> bool:

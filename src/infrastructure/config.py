@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     # ── AI / OpenAI ───────────────────────────────────────────────────────
     openai_api_key: SecretStr = SecretStr("")
+    openai_api_key_secondary: SecretStr = SecretStr("")
     openai_model: str = "gpt-4o-mini"
     ai_enabled: bool = True
 
@@ -95,6 +96,15 @@ class Settings(BaseSettings):
             "Authorization": f"Bearer {self.whatsapp_token.get_secret_value()}",
             "Content-Type": "application/json",
         }
+
+    def openai_api_keys(self) -> tuple[str, ...]:
+        """Return deduplicated configured OpenAI API keys in retry order."""
+        keys: list[str] = []
+        for secret in (self.openai_api_key, self.openai_api_key_secondary):
+            value = secret.get_secret_value().strip()
+            if value and value not in keys:
+                keys.append(value)
+        return tuple(keys)
 
 
 @lru_cache

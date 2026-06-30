@@ -46,7 +46,7 @@ class BuscarPrestadoresInput(BaseModel):
     solo_verificados: bool = Field(default=False)
     limit: int = Field(default=3, ge=3, le=15)
     mensaje_contacto: str = Field(
-        default="Hola, te contacto por ServiMatch para consultar sobre tus servicios.",
+        default="Hola, te contacto por MiOficio para consultar sobre tus servicios.",
         description="Predefined message sent when the user taps 'Contactar'",
     )
 
@@ -69,11 +69,17 @@ class CrearPrestadorInput(BaseModel):
     ciudad: str | None = Field(default=None, description="City or locality")
     disponibilidad: str | None = None
     experiencia: str | None = Field(default=None, max_length=500)
+    max_distance_km: float = Field(default=15.0, gt=0)
     facturacion: str = Field(default="no_factura")
 
 
 class ActualizarPrestadorInput(BaseModel):
-    field: str = Field(description="Field to update: disponibilidad, experiencia, barrio, ciudad, rubros")
+    field: str = Field(
+        description=(
+            "Field to update: disponibilidad, experiencia, barrio, ciudad, "
+            "rubros, max_distance_km"
+        )
+    )
     value: str = Field(description="New value (rubros as JSON array string)")
 
 
@@ -190,6 +196,10 @@ async def buscar_prestadores(
     results = []
     for r in provider_rows:
         rubros = _parse_rubros_json(r.rubros)
+        max_distance_km = _provider_max_distance_km(r)
+        distance_km = _distance_km(origin_lat, origin_lon, r.lat, r.lon)
+        if _is_provider_out_of_range(distance_km, max_distance_km):
+            continue
         results.append(
             {
                 "nombre": r.nombre,
@@ -202,7 +212,8 @@ async def buscar_prestadores(
                 "disponibilidad": r.disponibilidad,
                 "badge_verificado": r.badge_activo,
                 "facturacion": r.facturacion,
-                "distance_km": _distance_km(origin_lat, origin_lon, r.lat, r.lon),
+                "distance_km": distance_km,
+                "max_distance_km": max_distance_km,
             }
         )
     results.sort(
@@ -254,6 +265,7 @@ async def crear_prestador(
             barrio=params.barrio,
             disponibilidad=params.disponibilidad,
             experiencia=params.experiencia,
+            max_distance_km=params.max_distance_km,
             facturacion=params.facturacion,
             plan="free",
             activo=False,  # needs manual review
@@ -272,7 +284,14 @@ async def actualizar_prestador(
     params: ActualizarPrestadorInput,
 ) -> dict[str, Any]:
     """Update a single field of the current user's provider profile."""
-    allowed_fields = {"disponibilidad", "experiencia", "barrio", "ciudad", "rubros"}
+    allowed_fields = {
+        "disponibilidad",
+        "experiencia",
+        "barrio",
+        "ciudad",
+        "rubros",
+        "max_distance_km",
+    }
     if params.field not in allowed_fields:
         return {"error": f"Campo no permitido: {params.field}"}
 
@@ -282,6 +301,15 @@ async def actualizar_prestador(
             value = json.dumps(json.loads(params.value), ensure_ascii=False)
         except json.JSONDecodeError:
             return {"error": "El campo rubros debe ser un JSON array de strings."}
+    if params.field == "max_distance_km":
+        try:
+            value = float(params.value)
+        except ValueError:
+            return {"error": "El campo max_distance_km debe ser un número."}
+        if value <= 0:
+            return {
+                "error": "El campo max_distance_km debe ser mayor a cero."
+            }
 
     async with db_access_lock(ctx.deps):
         usuario_id = await _resolve_usuario_id(ctx.deps.db, ctx.deps.user_id)
@@ -329,6 +357,7 @@ async def consultar_prestador(
         "activo": row.activo,
         "disponibilidad": row.disponibilidad,
         "experiencia": row.experiencia,
+        "max_distance_km": _provider_max_distance_km(row),
         "facturacion": row.facturacion,
     }
 
@@ -618,3 +647,21 @@ def _distance_km(
         + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lon / 2) ** 2
     )
     return earth_radius_km * 2 * math.asin(math.sqrt(haversine))
+
+
+def _provider_max_distance_km(provider: Any) -> float:
+    """Return the provider-specific search radius, defaulting legacy rows to 15 km."""
+    value = getattr(provider, "max_distance_km", None)
+    if isinstance(value, (int, float)) and value > 0:
+        return float(value)
+    return 15.0
+
+
+def _is_provider_out_of_range(
+    distance_km: float | None,
+    max_distance_km: float,
+) -> bool:
+    """Return True when the provider should be hidden for this search origin."""
+    if distance_km is None:
+        return False
+    return distance_km > max_distance_km

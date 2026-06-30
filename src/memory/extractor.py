@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
-from openai import AsyncOpenAI
 from pydantic import ValidationError
 
 from src.memory.models import ExtractionResult, ExtractedFact
@@ -39,7 +39,7 @@ barrio, ciudad, latitude, longitude.
 class MemoryExtractor:
     """Extracts memorable facts from a conversation exchange."""
 
-    def __init__(self, client: AsyncOpenAI, model: str = "gpt-4o-mini") -> None:
+    def __init__(self, client: Any, model: str = "gpt-4o-mini") -> None:
         self._client = client
         self._model = model
 

@@ -160,6 +160,7 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             disponibilidad="Lunes a viernes",
             badge_activo=True,
             facturacion="monotributo",
+            max_distance_km=1000.0,
         )
         verified_near = SimpleNamespace(
             id=2,
@@ -172,6 +173,7 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             disponibilidad="Guardias",
             badge_activo=True,
             facturacion="monotributo",
+            max_distance_km=1000.0,
         )
         unverified_near = SimpleNamespace(
             id=3,
@@ -184,6 +186,7 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             disponibilidad="Sujeto a agenda",
             badge_activo=False,
             facturacion="monotributo",
+            max_distance_km=1000.0,
         )
 
         fake_db = SimpleNamespace(
@@ -225,6 +228,7 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             disponibilidad="Lunes a viernes",
             badge_activo=True,
             facturacion="monotributo",
+            max_distance_km=1000.0,
         )
         near_verified = SimpleNamespace(
             id=2,
@@ -237,6 +241,7 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
             disponibilidad="Guardias",
             badge_activo=True,
             facturacion="monotributo",
+            max_distance_km=1000.0,
         )
 
         fake_db = SimpleNamespace(
@@ -267,6 +272,57 @@ class ProviderSearchRankingTests(IsolatedAsyncioTestCase):
         geocode_mock.assert_awaited_once_with("Wilde")
         self.assertEqual(results[0]["nombre"], "Proveedor Wilde")
         self.assertIsNotNone(results[0]["distance_km"])
+
+    async def test_busqueda_excludes_provider_outside_its_max_distance(self) -> None:
+        """Providers beyond their own configured radius should be hidden."""
+        near_provider = SimpleNamespace(
+            id=1,
+            nombre="Proveedor Cercano",
+            rubros='["Plomeria"]',
+            ciudad="CABA",
+            barrio="Caballito",
+            lat=-34.6183,
+            lon=-58.4432,
+            disponibilidad="Guardias",
+            badge_activo=True,
+            facturacion="monotributo",
+            max_distance_km=15.0,
+        )
+        far_provider = SimpleNamespace(
+            id=2,
+            nombre="Proveedor Lejano",
+            rubros='["Plomeria"]',
+            ciudad="La Plata",
+            barrio="Centro",
+            lat=-34.9205,
+            lon=-57.9536,
+            disponibilidad="Lunes a viernes",
+            badge_activo=True,
+            facturacion="monotributo",
+            max_distance_km=10.0,
+        )
+
+        fake_db = SimpleNamespace(
+            execute=AsyncMock(
+                return_value=[
+                    (far_provider, "5491100001001"),
+                    (near_provider, "5491100001002"),
+                ]
+            )
+        )
+        ctx = SimpleNamespace(
+            deps=SimpleNamespace(
+                db=fake_db,
+                current_message_metadata={"latitude": -34.6037, "longitude": -58.3816},
+            )
+        )
+
+        results = await providers.buscar_prestadores(
+            ctx,
+            providers.BuscarPrestadoresInput(rubro="plomero", limit=3),
+        )
+
+        self.assertEqual([item["nombre"] for item in results], ["Proveedor Cercano"])
 
     async def test_resolve_search_origin_prefers_explicit_params_over_metadata(self) -> None:
         """Tool inputs should override message metadata when both are present."""

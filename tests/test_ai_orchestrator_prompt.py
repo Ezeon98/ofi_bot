@@ -74,6 +74,12 @@ def test_router_prompt_mentions_related_rubros_and_location_resolution_tools() -
     assert "menos de 3 resultados" in ROUTER_SYSTEM_PROMPT
 
 
+def test_router_prompt_mentions_system_question_intent() -> None:
+    """System/product questions should map to a dedicated intent."""
+    assert "**consultar_sistema**" in ROUTER_SYSTEM_PROMPT
+    assert "cómo funciona esto" in ROUTER_SYSTEM_PROMPT
+
+
 class AIOrchestratorFailureTests(IsolatedAsyncioTestCase):
     """Validate error handling around agent execution and persistence."""
 
@@ -87,7 +93,9 @@ class AIOrchestratorFailureTests(IsolatedAsyncioTestCase):
             memory_importance_threshold=0.7,
             agent_logging_enabled=False,
             openai_api_key=SimpleNamespace(get_secret_value=lambda: ""),
+            openai_api_key_secondary=SimpleNamespace(get_secret_value=lambda: ""),
             openai_model="gpt-4o-mini",
+            openai_api_keys=lambda: tuple(),
         )
         memory_service = SimpleNamespace(
             get_memories=AsyncMock(return_value=[]),
@@ -99,7 +107,7 @@ class AIOrchestratorFailureTests(IsolatedAsyncioTestCase):
         fake_result = RuntimeError("db failure")
 
         with (
-            patch.object(ai_orchestrator, "AsyncOpenAI", return_value=object()),
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
             patch.object(
                 ai_orchestrator.AIOrchestrator,
                 "_build_memory_service",
@@ -153,7 +161,9 @@ class AIOrchestratorAgentSearchTests(IsolatedAsyncioTestCase):
             memory_importance_threshold=0.7,
             agent_logging_enabled=False,
             openai_api_key=SimpleNamespace(get_secret_value=lambda: ""),
+            openai_api_key_secondary=SimpleNamespace(get_secret_value=lambda: ""),
             openai_model="gpt-4o-mini",
+            openai_api_keys=lambda: tuple(),
         )
 
     def _memory_service(self, memories: list | None = None) -> SimpleNamespace:
@@ -192,7 +202,7 @@ class AIOrchestratorAgentSearchTests(IsolatedAsyncioTestCase):
         location_update_mock = AsyncMock(return_value=None)
 
         with (
-            patch.object(ai_orchestrator, "AsyncOpenAI", return_value=object()),
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
             patch.object(
                 ai_orchestrator.AIOrchestrator,
                 "_build_memory_service",
@@ -273,7 +283,7 @@ class AIOrchestratorAgentSearchTests(IsolatedAsyncioTestCase):
                     action=MessageAction(
                         type="cta_url",
                         label="Contactar",
-                        url="https://api.whatsapp.com/send?phone=5491112345678&text=Hola%2C%20te%20contacto%20por%20ServiMatch%20para%20consultar%20sobre%20tus%20servicios.&type=phone_number&app_absent=0",
+                        url="https://api.whatsapp.com/send?phone=5491112345678&text=Hola%2C%20te%20contacto%20por%20MiOficio%20para%20consultar%20sobre%20tus%20servicios.&type=phone_number&app_absent=0",
                     ),
                 )
             ],
@@ -298,7 +308,7 @@ class AIOrchestratorAgentSearchTests(IsolatedAsyncioTestCase):
         guided_search_mock = AsyncMock(return_value=None)
 
         with (
-            patch.object(ai_orchestrator, "AsyncOpenAI", return_value=object()),
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
             patch.object(
                 ai_orchestrator.AIOrchestrator,
                 "_build_memory_service",
@@ -344,6 +354,104 @@ class AIOrchestratorAgentSearchTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.messages[0]["action"]["label"], "Contactar")
         router_run.assert_awaited_once()
         guided_search_mock.assert_not_awaited()
+
+
+class AIOrchestratorSystemFallbackTests(IsolatedAsyncioTestCase):
+    """Validate delegation of system questions to the documentation agent."""
+
+    def _settings(self) -> SimpleNamespace:
+        """Build test settings with AI memory enabled."""
+        return SimpleNamespace(
+            memory_enabled=True,
+            memory_max_memories=20,
+            memory_max_tokens=2000,
+            memory_summarize_after=50,
+            memory_importance_threshold=0.7,
+            agent_logging_enabled=False,
+            openai_api_key=SimpleNamespace(get_secret_value=lambda: ""),
+            openai_api_key_secondary=SimpleNamespace(get_secret_value=lambda: ""),
+            openai_model="gpt-4o-mini",
+            openai_api_keys=lambda: tuple(),
+        )
+
+    def _memory_service(self) -> SimpleNamespace:
+        """Build a memory-service stub for orchestrator tests."""
+        return SimpleNamespace(
+            get_memories=AsyncMock(return_value=[]),
+            get_or_create_conversation=AsyncMock(
+                return_value=SimpleNamespace(id=1, summary=None)
+            ),
+            get_recent_turns=AsyncMock(return_value=[]),
+            process_interaction=AsyncMock(),
+            upsert_memory=AsyncMock(),
+        )
+
+    async def test_process_delegates_system_questions_to_documentation_agent(self) -> None:
+        """A classified product question should be answered by the fallback agent."""
+        memory_service = self._memory_service()
+        db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+        router_response = ai_orchestrator.AgentResponse(
+            intent=ai_orchestrator.Intent.CONSULTAR_SISTEMA,
+            message="Te respondo con la info del sistema.",
+            confidence=0.92,
+        )
+        router_run = AsyncMock(
+            return_value=SimpleNamespace(
+                output=router_response,
+                new_messages=lambda: [],
+            )
+        )
+        fallback_answer = AsyncMock(
+            return_value=(
+                "MiOficio conecta clientes con prestadores verificados por "
+                "WhatsApp y ofrece un plan Gratis y otro Verificado para "
+                "prestadores."
+            )
+        )
+
+        with (
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_build_memory_service",
+                return_value=memory_service,
+            ),
+            patch.object(
+                ai_orchestrator.AIOrchestrator,
+                "_resolve_usuario_id",
+                new=AsyncMock(return_value=71),
+            ),
+            patch.object(
+                ai_orchestrator.ProviderRegistrationService,
+                "maybe_handle_registration",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                ai_orchestrator,
+                "router_agent",
+                new=SimpleNamespace(run=router_run),
+            ),
+            patch.object(
+                ai_orchestrator.SystemFallbackService,
+                "answer",
+                new=fallback_answer,
+            ),
+        ):
+            orchestrator = ai_orchestrator.AIOrchestrator(self._settings())
+            response = await orchestrator.process(
+                user_id="5491112345678",
+                message="¿Cómo funciona MiOficio y cuánto sale el plan?",
+                db=db,
+                metadata={"message_type": "text"},
+            )
+
+        self.assertEqual(response.intent, Intent.CONSULTAR_SISTEMA.value)
+        self.assertEqual(response.source, "llm")
+        self.assertIn("prestadores verificados", response.message)
+        router_run.assert_awaited_once()
+        fallback_answer.assert_awaited_once()
+        db.commit.assert_awaited_once()
+        memory_service.process_interaction.assert_awaited_once()
 
 
 class AIOrchestratorProviderFormattingTests(IsolatedAsyncioTestCase):
@@ -429,7 +537,7 @@ class AIOrchestratorProviderFormattingTests(IsolatedAsyncioTestCase):
         )
 
         with (
-            patch.object(ai_orchestrator, "AsyncOpenAI", return_value=object()),
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
             patch.object(
                 ai_orchestrator.AIOrchestrator,
                 "_build_memory_service",
@@ -566,7 +674,7 @@ class AIOrchestratorProviderFormattingTests(IsolatedAsyncioTestCase):
         )
 
         with (
-            patch.object(ai_orchestrator, "AsyncOpenAI", return_value=object()),
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
             patch.object(
                 ai_orchestrator.AIOrchestrator,
                 "_build_memory_service",
@@ -686,7 +794,7 @@ class AIOrchestratorProviderFormattingTests(IsolatedAsyncioTestCase):
         )
 
         with (
-            patch.object(ai_orchestrator, "AsyncOpenAI", return_value=object()),
+            patch.object(ai_orchestrator, "build_openai_client", return_value=object()),
             patch.object(
                 ai_orchestrator.AIOrchestrator,
                 "_build_memory_service",

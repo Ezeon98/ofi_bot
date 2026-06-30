@@ -64,6 +64,11 @@ def get_audio_duration(path: str) -> float:
     return 0.0
 
 
+def _build_location_message_text(lat: float, lon: float) -> str:
+    """Build the synthetic text used to route shared current locations."""
+    return f"Mi ubicación es {lat}, {lon}"
+
+
 async def _process_audio_message(
     uow: UnitOfWork,
     sender: str,
@@ -200,18 +205,13 @@ async def _handle_entries(uow: UnitOfWork, body: dict) -> None:
                                 loc["latitude"],
                                 loc["longitude"],
                             )
-                            location_parts = [
-                                part
-                                for part in [location_data.get("barrio"), location_data.get("ciudad")]
-                                if part
-                            ]
-                            location_label = ", ".join(location_parts) or (
-                                f"{loc['latitude']}, {loc['longitude']}"
-                            )
                             await procesar_texto(
                                 uow,
                                 sender,
-                                f"Mi ubicación es {location_label}",
+                                _build_location_message_text(
+                                    loc["latitude"],
+                                    loc["longitude"],
+                                ),
                                 msg_id,
                                 metadata={
                                     "message_type": "location",

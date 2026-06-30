@@ -52,6 +52,13 @@ processor = _load_processor_module()
 class AudioProcessorTests(IsolatedAsyncioTestCase):
     """Validate the webhook audio flow before the AI router."""
 
+    def test_build_location_message_text_uses_coordinates(self) -> None:
+        """Shared current location should be normalized into coordinate text."""
+        self.assertEqual(
+            processor._build_location_message_text(-34.6205897, -58.4413922),
+            "Mi ubicación es -34.6205897, -58.4413922",
+        )
+
     async def test_audio_message_routes_transcribed_text(self) -> None:
         """A valid audio note should be transcribed and processed as plain text."""
         uow = SimpleNamespace()

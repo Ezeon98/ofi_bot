@@ -57,7 +57,7 @@ def _build_contact_url(card: dict[str, object]) -> str:
     """Build a WhatsApp deeplink for the mock contact CTA."""
     return build_whatsapp_contact_url(
         str(card["phone"]),
-        f"Hola {card['name']}, te contacto desde LaburáYA.",
+        f"Hola {card['name']}, te contacto desde MiOficio.",
     )
 
 

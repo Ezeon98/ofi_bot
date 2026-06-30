@@ -19,7 +19,7 @@ TERMS_FILE_PATH = (
     Path(__file__).resolve().parents[3]
     / "static"
     / "legal"
-    / "laburaya-terminos-y-condiciones.pdf"
+    / "mioficio-terminos-y-condiciones.pdf"
 )
 TERMS_ACCEPT_BUTTON_ID = "terms_accept"
 TERMS_REJECT_BUTTON_ID = "terms_reject"
@@ -46,7 +46,7 @@ async def send_terms_prompt(sender: str) -> None:
             sender,
             str(TERMS_FILE_PATH),
             TERMS_FILE_PATH.name,
-            caption="Términos y condiciones de LaburáYA.",
+            caption="Términos y condiciones de MiOficio.",
         )
     else:
         logger.warning("Terms file not found: %s", TERMS_FILE_PATH)
@@ -99,7 +99,7 @@ async def handle_terms_gate(
     if selected_button_id == TERMS_REJECT_BUTTON_ID:
         await enviar_mensaje(
             sender,
-            "Para usar LaburáYA necesitás aceptar los términos y condiciones.",
+            "Para usar MiOficio necesitás aceptar los términos y condiciones.",
         )
 
     await send_terms_prompt(sender)

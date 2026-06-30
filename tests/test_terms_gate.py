@@ -43,7 +43,7 @@ class TermsGateTests(IsolatedAsyncioTestCase):
             "5491112345678",
             str(terms_file),
             "terms.pdf",
-            caption="Términos y condiciones de LaburáYA.",
+            caption="Términos y condiciones de MiOficio.",
         )
         enviar_botones_mock.assert_awaited_once()
 
@@ -99,11 +99,11 @@ class TermsGateTests(IsolatedAsyncioTestCase):
             [
                 {
                     "id": terms_gate.POST_TERMS_OFFER_SERVICES_BUTTON_ID,
-                    "title": "Quiero ofrecer mis servicios",
+                    "title": "Ofrecer servicios",
                 },
                 {
                     "id": terms_gate.POST_TERMS_SEEK_SERVICES_BUTTON_ID,
-                    "title": "Busco un Servicio",
+                    "title": "Buscar servicios",
                 },
             ],
         )

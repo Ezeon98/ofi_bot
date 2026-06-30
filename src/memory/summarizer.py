@@ -7,8 +7,7 @@ Called by MemoryService when turn count exceeds MemoryConfig.summarize_after.
 from __future__ import annotations
 
 import logging
-
-from openai import AsyncOpenAI
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +21,7 @@ Be concise and factual.
 class MemorySummarizer:
     """Creates a text summary of a list of conversation turns."""
 
-    def __init__(self, client: AsyncOpenAI, model: str = "gpt-4o-mini") -> None:
+    def __init__(self, client: Any, model: str = "gpt-4o-mini") -> None:
         self._client = client
         self._model = model
 

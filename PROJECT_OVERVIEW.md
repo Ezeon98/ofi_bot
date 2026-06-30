@@ -1,8 +1,8 @@
-# ServiMatch — Project Overview for AI Agents
+# MiOficio — Project Overview for AI Agents
 
 ## Resumen ejecutivo
 
-ServiMatch (también llamado "ofi_bot" o "LaburáYA" en flujos legales) es un bot de WhatsApp que conecta clientes con prestadores de servicios verificados en Argentina. Combina un pipeline de IA basado en OpenIA/PydanticAI para entender intenciones con un sistema de búsqueda guiada de prestadores, membresías pagas con MercadoPago, persistencia de memoria por usuario y scheduling de tareas.
+MiOficio es un bot de WhatsApp que conecta clientes con prestadores de servicios verificados en Argentina. Combina un pipeline de IA basado en OpenIA/PydanticAI para entender intenciones con un sistema de búsqueda guiada de prestadores, membresías pagas con MercadoPago, persistencia de memoria por usuario y scheduling de tareas.
 
 ---
 

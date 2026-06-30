@@ -18,8 +18,6 @@ import re
 from types import SimpleNamespace
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from src.agents.dependencies import AgentDependencies
 from src.agents.models.response import (
     AgentResponse,
@@ -138,7 +136,7 @@ class ProviderSearchService:
         *,
         memory_config: Any,
         agent_logger: Any | None = None,
-        openai_client: AsyncOpenAI | None = None,
+        openai_client: Any | None = None,
         openai_model: str = "gpt-4o-mini",
     ) -> None:
         self._memory_config = memory_config
@@ -667,7 +665,7 @@ class ProviderSearchService:
         rubro: str,
         location_label: str,
         providers: list[dict[str, Any]],
-        mensaje_contacto: str = "Hola, te contacto por ServiMatch para consultar sobre tus servicios.",
+        mensaje_contacto: str = "Hola, te contacto por MiOficio para consultar sobre tus servicios.",
     ) -> tuple[str, list[Message]]:
         """Render the provider shortlist as individual messages with contact buttons."""
         count = len(providers)

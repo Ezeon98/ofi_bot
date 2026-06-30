@@ -28,7 +28,6 @@ import logging
 import time
 from typing import Any
 
-from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,12 +37,14 @@ from src.agents.router_agent import router_agent
 from src.context.builder import ContextBuilder
 from src.infrastructure.config import Settings
 from src.infrastructure.database.repositories.usuario import UsuarioRepository
+from src.infrastructure.external.openai_client import build_openai_client
 from src.memory.extractor import MemoryExtractor
 from src.memory.models import MemoryConfig
 from src.memory.service import MemoryService
 from src.memory.summarizer import MemorySummarizer
 from src.application.services.provider_registration_service import ProviderRegistrationService
 from src.application.services.provider_search_service import ProviderSearchService
+from src.application.services.system_fallback_service import SystemFallbackService
 from src.utils.agent_logger import AgentLogger
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ class AIOrchestrator:
             summarize_after=settings.memory_summarize_after,
             importance_threshold=settings.memory_importance_threshold,
         )
-        self._openai = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
+        self._openai = build_openai_client(settings)
         self._context_builder = ContextBuilder(max_tokens=self._memory_config.max_tokens)
         self._alog = AgentLogger(enabled=settings.agent_logging_enabled)
         self._provider_registration = ProviderRegistrationService(
@@ -98,6 +99,10 @@ class AIOrchestrator:
             agent_logger=self._alog,
             openai_client=self._openai,
             openai_model=settings.openai_model,
+        )
+        self._system_fallback = SystemFallbackService(
+            client=self._openai,
+            model=settings.openai_model,
         )
 
     async def process(
@@ -256,6 +261,15 @@ class AIOrchestrator:
             )
             return self._to_orchestrator_response(agent_response, source="llm_error")
 
+        if agent_response.intent == Intent.CONSULTAR_SISTEMA:
+            agent_response = await self._answer_system_question(
+                agent_response=agent_response,
+                message=message,
+                system_context=system_context,
+                metadata=metadata,
+                turn_id=turn_id,
+            )
+
         # ── 6-7. Post-process agent response (reformat providers into multi-message) ──
         agent_response = await self._provider_search.maybe_reformat_provider_response(
             agent_response,
@@ -386,6 +400,45 @@ class AIOrchestrator:
             summarizer=MemorySummarizer(self._openai, model="gpt-4o-mini"),
             config=self._memory_config,
             db_lock=db_lock,
+        )
+
+    async def _answer_system_question(
+        self,
+        *,
+        agent_response: AgentResponse,
+        message: str,
+        system_context: str,
+        metadata: dict[str, Any] | None,
+        turn_id: str,
+    ) -> AgentResponse:
+        """Delegate product questions to the documentation-backed agent."""
+        try:
+            answer = await self._system_fallback.answer(
+                question=message,
+                system_context=system_context,
+                metadata=metadata,
+            )
+        except Exception as exc:
+            logger.exception(
+                "System fallback agent failed for question %r: %s",
+                message,
+                exc,
+            )
+            self._alog.error(
+                turn_id,
+                "system_fallback.error",
+                exception=str(exc),
+            )
+            return agent_response
+
+        return AgentResponse(
+            intent=Intent.CONSULTAR_SISTEMA,
+            message=answer,
+            messages=[],
+            confidence=agent_response.confidence,
+            entities=agent_response.entities,
+            requires_action=False,
+            metadata=agent_response.metadata,
         )
 
     @staticmethod

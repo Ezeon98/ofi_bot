@@ -1,4 +1,4 @@
-"""RouterAgent — the single PydanticAI agent for ServiMatch.
+"""RouterAgent — the single PydanticAI agent for MiOficio.
 
 Responsibilities:
   - Classify intent

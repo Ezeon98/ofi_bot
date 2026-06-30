@@ -152,6 +152,9 @@ class ProviderModel(Base):
     lon: Mapped[float | None] = mapped_column(Float, nullable=True)
     disponibilidad: Mapped[str | None] = mapped_column(String(200), nullable=True)
     experiencia: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    max_distance_km: Mapped[float] = mapped_column(
+        Float, nullable=False, default=15.0, server_default="15"
+    )
     facturacion: Mapped[str] = mapped_column(
         String(30), nullable=False, default="no_factura", server_default="no_factura"
     )

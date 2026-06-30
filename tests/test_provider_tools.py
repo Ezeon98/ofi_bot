@@ -59,6 +59,35 @@ class ProviderToolsTests(IsolatedAsyncioTestCase):
         self.assertIsNotNone(db.added)
         self.assertEqual(db.added.usuario_id, 42)
         self.assertEqual(db.added.nombre, "Juan Perez")
+        self.assertEqual(db.added.max_distance_km, 15.0)
+
+    async def test_actualizar_prestador_valida_max_distance_km(self) -> None:
+        """Radius updates should require a positive numeric kilometer value."""
+        ctx = SimpleNamespace(deps=SimpleNamespace())
+
+        invalid_number = await provider_tools.actualizar_prestador(
+            ctx,
+            provider_tools.ActualizarPrestadorInput(
+                field="max_distance_km",
+                value="abc",
+            ),
+        )
+        invalid_zero = await provider_tools.actualizar_prestador(
+            ctx,
+            provider_tools.ActualizarPrestadorInput(
+                field="max_distance_km",
+                value="0",
+            ),
+        )
+
+        self.assertEqual(
+            invalid_number,
+            {"error": "El campo max_distance_km debe ser un número."},
+        )
+        self.assertEqual(
+            invalid_zero,
+            {"error": "El campo max_distance_km debe ser mayor a cero."},
+        )
 
     async def test_busqueda_rubros_relacionados_devuelve_alternativas(self) -> None:
         """The AI helper should expose close canonical rubro alternatives."""
