@@ -64,6 +64,8 @@ class ResolverUbicacionInput(BaseModel):
 
 class CrearPrestadorInput(BaseModel):
     nombre: str
+    dni: str | None = Field(default=None, pattern=r"^\d{8}$")
+    edad: int | None = Field(default=None, ge=18, le=99)
     rubros: list[str] = Field(min_length=1, max_length=5)
     barrio: str | None = Field(default=None, description="Neighborhood or district")
     ciudad: str | None = Field(default=None, description="City or locality")
@@ -258,6 +260,8 @@ async def crear_prestador(
         provider = ProviderModel(
             usuario_id=usuario_id,
             nombre=params.nombre,
+            dni=params.dni,
+            edad=params.edad,
             rubros=json.dumps(params.rubros, ensure_ascii=False),
             ciudad=params.ciudad,
             barrio=params.barrio,

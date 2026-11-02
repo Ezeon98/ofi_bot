@@ -18,6 +18,7 @@ from src.infrastructure.config import get_settings
 from src.infrastructure.container import UnitOfWork
 from src.infrastructure.database.session import get_session
 from src.infrastructure.queue.processor import process_webhook_entries
+from src.presentation.api.admin import router as admin_router
 from src.presentation.api.subscriptions import router as subscriptions_router
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ app.mount(
     name="frontend-assets",
 )
 app.include_router(subscriptions_router, tags=["subscriptions"])
+app.include_router(admin_router, tags=["admin"])
 
 
 # ── Serve frontend subscription page ─────────────────────────────────────────
@@ -100,6 +102,21 @@ async def serve_subscription_page() -> Response:
     html_path = pathlib.Path("frontend/index.html")
     if not html_path.exists():
         return JSONResponse(status_code=404, content={"detail": "Frontend not found."})
+    return Response(
+        content=html_path.read_text(encoding="utf-8"),
+        media_type="text/html",
+    )
+
+
+# ── Serve admin panel ─────────────────────────────────────────────────────────
+@app.get("/admin", response_model=None)
+async def serve_admin_panel() -> Response:
+    """Return the admin panel frontend (login + user list + conversations)."""
+    import pathlib
+
+    html_path = pathlib.Path("static/admin/index.html")
+    if not html_path.exists():
+        return JSONResponse(status_code=404, content={"detail": "Admin panel not found."})
     return Response(
         content=html_path.read_text(encoding="utf-8"),
         media_type="text/html",

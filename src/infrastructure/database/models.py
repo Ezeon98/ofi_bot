@@ -132,6 +132,14 @@ class ProviderModel(Base):
         Index("ix_providers_ciudad_barrio_activo", "ciudad", "barrio", "activo"),
         UniqueConstraint("usuario_id", name="uq_providers_usuario_id"),
         CheckConstraint(
+            "(dni IS NULL) OR (dni ~ '^[0-9]{8}$')",
+            name="ck_providers_dni_format",
+        ),
+        CheckConstraint(
+            "(edad IS NULL) OR (edad BETWEEN 18 AND 99)",
+            name="ck_providers_edad_range",
+        ),
+        CheckConstraint(
             "NOT activo OR "
             "(lat IS NOT NULL AND lon IS NOT NULL AND ciudad IS NOT NULL AND barrio IS NOT NULL)",
             name="ck_providers_active_requires_location",
@@ -143,6 +151,8 @@ class ProviderModel(Base):
         Integer, ForeignKey("usuarios.id", ondelete="CASCADE"), nullable=False, index=True
     )
     nombre: Mapped[str] = mapped_column(String(100), nullable=False)
+    dni: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    edad: Mapped[int | None] = mapped_column(Integer, nullable=True)
     rubros: Mapped[str] = mapped_column(Text, nullable=False, default="[]")  # JSON array
     ciudad: Mapped[str | None] = mapped_column(String(120), nullable=True)
     barrio: Mapped[str | None] = mapped_column(String(120), nullable=True)

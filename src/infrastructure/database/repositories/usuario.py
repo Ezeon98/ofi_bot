@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import select, insert, update, func
+from sqlalchemy import select, insert, update, func, or_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -155,3 +155,39 @@ class UsuarioRepository:
             .where(UsuarioModel.telefono == telefono)
             .values(accepted_terms_at=_now())
         )
+
+    # ── Admin panel ───────────────────────────────────────────────────────
+
+    async def get_user_by_id(self, user_id: int):
+        """Return a user by their integer PK, or None if not found."""
+        result = await self._s.execute(select(UsuarioModel).where(UsuarioModel.id == user_id))
+        return result.scalar_one_or_none()
+
+    async def count_all(self) -> int:
+        """Return the total number of registered users."""
+        result = await self._s.execute(select(func.count()).select_from(UsuarioModel))
+        return result.scalar_one() or 0
+
+    async def get_recent_users(self, limit: int = 20, offset: int = 0):
+        """Return the most recently registered users, paginated."""
+        result = await self._s.execute(
+            select(UsuarioModel)
+            .order_by(UsuarioModel.fecha_registro.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(result.scalars().all())
+
+    async def search_users(self, query: str, limit: int = 20):
+        """Search users by ID, phone number or name."""
+        like = f"%{query}%"
+        conditions = [UsuarioModel.telefono.ilike(like), UsuarioModel.nombre.ilike(like)]
+        if query.strip().isdigit():
+            conditions.append(UsuarioModel.id == int(query.strip()))
+        result = await self._s.execute(
+            select(UsuarioModel)
+            .where(or_(*conditions))
+            .order_by(UsuarioModel.fecha_registro.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())

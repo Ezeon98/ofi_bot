@@ -48,6 +48,8 @@ class ProviderToolsTests(IsolatedAsyncioTestCase):
         )
         params = provider_tools.CrearPrestadorInput(
             nombre="Juan Perez",
+            dni="30111222",
+            edad=36,
             rubros=["Plomeria", "Electricidad"],
             barrio="Caballito",
             ciudad="CABA",
@@ -59,6 +61,8 @@ class ProviderToolsTests(IsolatedAsyncioTestCase):
         self.assertIsNotNone(db.added)
         self.assertEqual(db.added.usuario_id, 42)
         self.assertEqual(db.added.nombre, "Juan Perez")
+        self.assertEqual(db.added.dni, "30111222")
+        self.assertEqual(db.added.edad, 36)
         self.assertEqual(db.added.max_distance_km, 15.0)
 
     async def test_actualizar_prestador_valida_max_distance_km(self) -> None:

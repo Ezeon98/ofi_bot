@@ -191,3 +191,18 @@ class ConversationRepository:
             await self._session.execute(
                 delete(ConversationTurnModel).where(ConversationTurnModel.id.in_(ids_to_drop))
             )
+
+    async def get_recent_turns_by_user(
+        self, user_id: int, limit: int = 200
+    ) -> list[ConversationTurnRead]:
+        """Return recent message turns across all of a user's conversations (admin panel)."""
+        stmt = (
+            select(ConversationTurnModel)
+            .join(ConversationModel, ConversationModel.id == ConversationTurnModel.conversation_id)
+            .where(ConversationModel.user_id == user_id)
+            .order_by(ConversationTurnModel.created_at.desc())
+            .limit(limit)
+        )
+        rows = list(await self._session.scalars(stmt))
+        rows.reverse()  # chronological order
+        return [ConversationTurnRead.model_validate(r) for r in rows]

@@ -69,6 +69,16 @@ def _build_location_message_text(lat: float, lon: float) -> str:
     return f"Mi ubicación es {lat}, {lon}"
 
 
+def _image_extension_for(message: dict) -> str:
+    """Pick a file extension for an inbound WhatsApp image payload."""
+    mime_type = message.get("image", {}).get("mime_type", "")
+    if mime_type == "image/png":
+        return "png"
+    if mime_type == "image/webp":
+        return "webp"
+    return "jpg"
+
+
 async def _process_audio_message(
     uow: UnitOfWork,
     sender: str,
@@ -117,6 +127,46 @@ async def _process_audio_message(
             texto,
             msg_id,
             metadata={"message_type": "audio", "media_id": media_id},
+        )
+    finally:
+        if os.path.exists(archivo):
+            os.remove(archivo)
+
+
+async def _process_image_message(
+    uow: UnitOfWork,
+    sender: str,
+    message: dict,
+    msg_id: str,
+) -> None:
+    """Download an inbound image and route it with local-path metadata."""
+    image = message.get("image", {})
+    media_id = image.get("id", "")
+    if not media_id:
+        logger.warning("Image message without media id from %s", sender)
+        await enviar_mensaje(sender, "No pude descargar la imagen. Intentá de nuevo.")
+        return
+
+    extension = _image_extension_for(message)
+    archivo = os.path.join(
+        settings.tmp_dir,
+        f"image_{sender}_{uuid.uuid4().hex}.{extension}",
+    )
+    try:
+        await descargar_media(media_id, archivo)
+        caption = str(image.get("caption", "") or "")
+        await procesar_texto(
+            uow,
+            sender,
+            caption or "[imagen]",
+            msg_id,
+            metadata={
+                "message_type": "image",
+                "media_id": media_id,
+                "image_path": archivo,
+                "mime_type": image.get("mime_type") or "image/jpeg",
+                "caption": caption,
+            },
         )
     finally:
         if os.path.exists(archivo):
@@ -270,6 +320,8 @@ async def _handle_entries(uow: UnitOfWork, body: dict) -> None:
                                 )
                         case "audio":
                             await _process_audio_message(uow, sender, message, msg_id)
+                        case "image":
+                            await _process_image_message(uow, sender, message, msg_id)
                 except Exception as exc:
                     logger.exception("Error procesando mensaje de %s", sender)
                     await enviar_mensaje(

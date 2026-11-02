@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MiOficio · Admin Panel</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --card: #222636;
+    --border: #2e3348;
+    --accent: #2f8f5b;
+    --accent-hover: #267a4c;
+    --text: #e4e6f0;
+    --muted: #8b8fa3;
+    --green: #34d399;
+    --red: #f87171;
+    --orange: #fbbf24;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100dvh;
+  }
+
+  /* ── Login ── */
+  #login-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100dvh;
+    padding: 1rem;
+  }
+  .login-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 2.5rem 2rem;
+    width: 100%;
+    max-width: 360px;
+    text-align: center;
+  }
+  .login-box h1 { font-size: 1.5rem; margin-bottom: .25rem; }
+  .login-box p { color: var(--muted); font-size: .85rem; margin-bottom: 1.5rem; }
+  .login-box input {
+    width: 100%;
+    padding: .7rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--text);
+    font-size: .95rem;
+    margin-bottom: .75rem;
+    outline: none;
+  }
+  .login-box input:focus { border-color: var(--accent); }
+  .login-box button {
+    width: 100%;
+    padding: .7rem;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    cursor: pointer;
+    margin-top: .5rem;
+  }
+  .login-box button:hover { background: var(--accent-hover); }
+  #login-error { color: var(--red); font-size: .85rem; margin-top: .75rem; display: none; }
+
+  /* ── Main layout ── */
+  #app { display: none; min-height: 100dvh; }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: .75rem 1rem;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+  .topbar h1 { font-size: 1.1rem; }
+  .topbar-right { display: flex; gap: .5rem; align-items: center; }
+  .topbar button, .topbar .badge {
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 6px;
+    padding: .35rem .7rem;
+    font-size: .8rem;
+    cursor: pointer;
+  }
+  .topbar button:hover { color: var(--text); border-color: var(--accent); }
+  .badge-count { color: var(--accent); font-weight: 700; }
+
+  .content {
+    display: flex;
+    flex-direction: column;
+    height: calc(100dvh - 49px);
+  }
+
+  /* User list */
+  #user-list-panel {
+    flex: 1;
+    overflow-y: auto;
+    padding: .5rem;
+  }
+  .search-box {
+    width: 100%;
+    padding: .6rem .8rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--text);
+    font-size: .9rem;
+    margin-bottom: .5rem;
+    outline: none;
+  }
+  .search-box:focus { border-color: var(--accent); }
+  .user-card {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding: .75rem .8rem;
+    border-radius: 10px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background .15s;
+  }
+  .user-card:hover { background: var(--card); }
+  .user-card.active { background: var(--card); border-color: var(--accent); }
+  .user-avatar {
+    min-width: 38px;
+    width: auto;
+    height: 38px;
+    padding: 0 .45rem;
+    border-radius: 50%;
+    background: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: .85rem;
+    flex-shrink: 0;
+    color: #fff;
+  }
+  .user-info { flex: 1; min-width: 0; }
+  .user-name {
+    font-weight: 600;
+    font-size: .9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .user-meta {
+    font-size: .75rem;
+    color: var(--muted);
+    display: flex;
+    gap: .5rem;
+    flex-wrap: wrap;
+  }
+  .tier-badge {
+    font-size: .65rem;
+    padding: .15rem .45rem;
+    border-radius: 4px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .tier-free { background: #374151; color: #9ca3af; }
+  .tier-pro { background: #065f4622; color: #10b981; }
+  .tier-premium { background: #7c3aed22; color: #a78bfa; }
+
+  /* Detail panel */
+  #detail-panel {
+    display: none;
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+    background: var(--bg);
+    flex-direction: column;
+  }
+  .detail-header {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    margin-bottom: 1rem;
+  }
+  .detail-back {
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 6px;
+    padding: .35rem .6rem;
+    cursor: pointer;
+    font-size: .9rem;
+  }
+  .detail-back:hover { color: var(--text); }
+  .detail-title { font-size: 1.1rem; font-weight: 700; }
+  .detail-sub { font-size: .8rem; color: var(--muted); }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: .6rem;
+    margin-bottom: 1rem;
+  }
+  .stat-card {
+    background: var(--card);
+    border-radius: 10px;
+    padding: .75rem;
+    border: 1px solid var(--border);
+  }
+  .stat-label { font-size: .7rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .stat-value { font-size: 1.1rem; font-weight: 700; margin-top: .15rem; word-break: break-all; }
+
+  /* Chat transcript */
+  #chat-log {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+    padding: .5rem 0 1rem;
+    overflow-y: auto;
+  }
+  .bubble {
+    max-width: 75%;
+    padding: .55rem .8rem;
+    border-radius: 12px;
+    font-size: .88rem;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .bubble-meta {
+    font-size: .68rem;
+    color: var(--muted);
+    margin-top: .2rem;
+  }
+  .bubble.user {
+    align-self: flex-start;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 2px;
+  }
+  .bubble.assistant {
+    align-self: flex-end;
+    background: var(--accent);
+    color: #fff;
+    border-bottom-right-radius: 2px;
+  }
+  .bubble.assistant .bubble-meta { color: #ffffffaa; }
+
+  /* Send message box */
+  .send-box {
+    display: flex;
+    gap: .5rem;
+    padding-top: .75rem;
+    border-top: 1px solid var(--border);
+  }
+  .send-box textarea {
+    flex: 1;
+    min-height: 44px;
+    max-height: 140px;
+    padding: .6rem .8rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--text);
+    font-size: .9rem;
+    resize: vertical;
+    outline: none;
+    font-family: inherit;
+  }
+  .send-box textarea:focus { border-color: var(--accent); }
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: .55rem 1.1rem;
+    font-size: .9rem;
+    cursor: pointer;
+  }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+  .send-result {
+    font-size: .8rem;
+    margin-top: .4rem;
+    display: none;
+  }
+  .send-result.ok { color: var(--green); display: block; }
+  .send-result.err { color: var(--red); display: block; }
+
+  .empty { text-align: center; color: var(--muted); padding: 3rem 1rem; font-size: .9rem; }
+
+  /* ── Desktop (side-by-side) ── */
+  @media (min-width: 768px) {
+    .content { flex-direction: row; height: calc(100dvh - 49px); }
+    #user-list-panel {
+      width: 340px;
+      min-width: 280px;
+      max-width: 380px;
+      border-right: 1px solid var(--border);
+      flex: none;
+    }
+    #detail-panel { display: flex; flex: 1; }
+    .detail-back { display: none; }
+  }
+
+  /* ── Mobile ── */
+  @media (max-width: 767px) {
+    #user-list-panel.hidden { display: none; }
+    #detail-panel.visible { display: flex; }
+    .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    .topbar { flex-wrap: wrap; gap: .4rem; padding: .5rem .75rem; }
+    .topbar h1 { font-size: 1rem; width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="login-screen">
+  <div class="login-box">
+    <h1>🔐 MiOficio Admin</h1>
+    <p>Panel de administración</p>
+    <input type="text" id="login-user" placeholder="Usuario" autocomplete="off">
+    <input type="password" id="login-pass" placeholder="Contraseña">
+    <button onclick="doLogin()">Ingresar</button>
+    <div id="login-error">Credenciales incorrectas</div>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app">
+  <div class="topbar">
+    <h1>MiOficio Admin</h1>
+    <div class="topbar-right">
+      <span class="badge">Usuarios: <span class="badge-count" id="user-count">0</span></span>
+      <button onclick="loadUsers()">↻</button>
+      <button onclick="doLogout()">Salir</button>
+    </div>
+  </div>
+  <div class="content">
+    <!-- User list -->
+    <div id="user-list-panel">
+      <input class="search-box" id="search-input" placeholder="Buscar por ID, teléfono o nombre…" oninput="debouncedSearch()">
+      <div id="user-list"></div>
+    </div>
+    <!-- Detail -->
+    <div id="detail-panel">
+      <div class="empty" id="detail-empty">Seleccioná un usuario para ver su conversación</div>
+      <div id="detail-content" style="display:none; flex-direction:column; flex:1; min-height:0;">
+        <div class="detail-header">
+          <button class="detail-back" onclick="closeDetail()">← Volver</button>
+          <div>
+            <div class="detail-title" id="detail-name">—</div>
+            <div class="detail-sub" id="detail-phone">—</div>
+          </div>
+        </div>
+        <div class="stat-grid" id="detail-stats"></div>
+        <div id="chat-log"><div class="empty">Cargando mensajes…</div></div>
+        <div class="send-box">
+          <textarea id="send-text" placeholder="Escribí un mensaje para enviar por WhatsApp…"></textarea>
+          <button class="btn-primary" id="send-btn" onclick="sendDirectMessage()">Enviar</button>
+        </div>
+        <div class="send-result" id="send-result"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let TOKEN = localStorage.getItem('mioficio_admin_token') || '';
+let selectedId = null;
+let refreshTimer = null;
+let _searchTimer = null;
+
+// ── Auth ──
+async function doLogin() {
+  const user = document.getElementById('login-user').value.trim();
+  const pass = document.getElementById('login-pass').value;
+  try {
+    const res = await fetch(`${API}/api/admin/login`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: user, password: pass}),
+    });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    TOKEN = data.token;
+    localStorage.setItem('mioficio_admin_token', TOKEN);
+    showApp();
+  } catch {
+    document.getElementById('login-error').style.display = 'block';
+  }
+}
+
+function doLogout() {
+  TOKEN = '';
+  localStorage.removeItem('mioficio_admin_token');
+  clearInterval(refreshTimer);
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+}
+
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  loadUsers();
+  refreshTimer = setInterval(loadUsers, 15000);
+}
+
+async function authedFetch(path, opts = {}) {
+  const res = await fetch(`${API}${path}`, {
+    ...opts,
+    headers: {...(opts.headers || {}), 'Authorization': `Bearer ${TOKEN}`},
+  });
+  if (res.status === 401) {
+    doLogout();
+    throw new Error('unauthorized');
+  }
+  return res;
+}
+
+// ── Users ──
+function debouncedSearch() {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(() => loadUsers(), 300);
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str ?? '';
+  return div.innerHTML;
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('es-AR', {dateStyle: 'short', timeStyle: 'short'});
+}
+
+async function loadUsers() {
+  const q = document.getElementById('search-input').value.trim();
+  const url = q ? `/api/admin/users?limit=50&q=${encodeURIComponent(q)}` : `/api/admin/users?limit=50`;
+  try {
+    const res = await authedFetch(url);
+    const data = await res.json();
+    document.getElementById('user-count').textContent = data.total ?? data.users.length;
+    renderUserList(data.users);
+  } catch (e) {
+    console.error('loadUsers failed', e);
+  }
+}
+
+function renderUserList(users) {
+  const container = document.getElementById('user-list');
+  if (!users.length) {
+    container.innerHTML = '<div class="empty">Sin usuarios</div>';
+    return;
+  }
+  container.innerHTML = users.map(u => {
+    const initial = (u.nombre || u.telefono || '?').trim()[0]?.toUpperCase() || '?';
+    const activeClass = u.id === selectedId ? 'active' : '';
+    return `
+      <div class="user-card ${activeClass}" onclick="openUser(${u.id})">
+        <div class="user-avatar">${initial}</div>
+        <div class="user-info">
+          <div class="user-name">${escapeHtml(u.nombre || 'Sin nombre')}</div>
+          <div class="user-meta">
+            <span>${escapeHtml(u.telefono)}</span>
+            <span class="tier-badge tier-${u.tier}">${u.tier}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── Detail / conversation ──
+async function openUser(id) {
+  selectedId = id;
+  document.getElementById('detail-empty').style.display = 'none';
+  document.getElementById('detail-content').style.display = 'flex';
+  document.getElementById('detail-panel').classList.add('visible');
+  document.getElementById('user-list-panel').classList.add('hidden');
+  document.getElementById('send-result').style.display = 'none';
+  document.getElementById('send-text').value = '';
+
+  const cards = document.querySelectorAll('.user-card');
+  cards.forEach(c => c.classList.remove('active'));
+
+  try {
+    const [detailRes, msgRes] = await Promise.all([
+      authedFetch(`/api/admin/users/${id}`),
+      authedFetch(`/api/admin/users/${id}/messages`),
+    ]);
+    const detail = await detailRes.json();
+    const msgData = await msgRes.json();
+    renderDetail(detail);
+    renderChat(msgData.messages || []);
+  } catch (e) {
+    console.error('openUser failed', e);
+  }
+}
+
+function renderDetail(u) {
+  document.getElementById('detail-name').textContent = u.nombre || 'Sin nombre';
+  document.getElementById('detail-phone').textContent = u.telefono;
+  document.getElementById('detail-stats').innerHTML = `
+    <div class="stat-card">
+      <div class="stat-label">Plan</div>
+      <div class="stat-value">${u.tier}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Registrado</div>
+      <div class="stat-value">${formatDate(u.fecha_registro)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Última interacción</div>
+      <div class="stat-value">${formatDate(u.last_interaction)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Términos aceptados</div>
+      <div class="stat-value">${u.accepted_terms_at ? 'Sí' : 'No'}</div>
+    </div>
+  `;
+}
+
+function renderChat(messages) {
+  const log = document.getElementById('chat-log');
+  if (!messages.length) {
+    log.innerHTML = '<div class="empty">Sin mensajes registrados</div>';
+    return;
+  }
+  log.innerHTML = messages.map(m => {
+    const cls = m.role === 'assistant' ? 'assistant' : 'user';
+    return `
+      <div class="bubble ${cls}">
+        ${escapeHtml(m.contenido)}
+        <div class="bubble-meta">${formatDate(m.fecha)}</div>
+      </div>
+    `;
+  }).join('');
+  log.scrollTop = log.scrollHeight;
+}
+
+function closeDetail() {
+  selectedId = null;
+  document.getElementById('detail-panel').classList.remove('visible');
+  document.getElementById('user-list-panel').classList.remove('hidden');
+}
+
+// ── Send direct message ──
+async function sendDirectMessage() {
+  if (!selectedId) return;
+  const text = document.getElementById('send-text').value.trim();
+  const resultEl = document.getElementById('send-result');
+  const btn = document.getElementById('send-btn');
+  if (!text) return;
+
+  btn.disabled = true;
+  resultEl.className = 'send-result';
+  resultEl.style.display = 'none';
+  try {
+    const res = await authedFetch(`/api/admin/users/${selectedId}/send-message`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: text}),
+    });
+    const data = await res.json();
+    if (!res.ok || data.status === 'error') {
+      throw new Error(data.detail || 'Error al enviar');
+    }
+    resultEl.textContent = '✓ Mensaje enviado';
+    resultEl.className = 'send-result ok';
+    document.getElementById('send-text').value = '';
+    await openUser(selectedId);
+  } catch (e) {
+    resultEl.textContent = `✗ ${e.message}`;
+    resultEl.className = 'send-result err';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── Boot ──
+if (TOKEN) {
+  showApp();
+}
+</script>
+</body>
+</html>

@@ -56,7 +56,7 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(response)
         self.assertEqual(response.intent, Intent.REGISTRAR_PRESTADOR)
-        self.assertIn("¿Cómo te llamás?", response.message)
+        self.assertIn("foto clara del frente de tu DNI", response.message)
         state_repo.save.assert_awaited_once()
 
     async def test_registration_intent_starts_flow_and_requests_name(self) -> None:
@@ -84,14 +84,260 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(response)
         self.assertEqual(response.intent, Intent.REGISTRAR_PRESTADOR)
-        self.assertIn("¿Cómo te llamás?", response.message)
+        self.assertIn("foto clara del frente de tu DNI", response.message)
         state_repo.save.assert_awaited_once_with(
             "5491162527111",
             {
                 "estado": provider_registration_service.REGISTRATION_STATE_NAME,
-                "paso": "awaiting_name",
+                "paso": "awaiting_dni",
                 "nombre": None,
                 "edad": None,
+                "dni": None,
+                "fecha_nacimiento": None,
+                "rubros": None,
+            },
+        )
+
+    async def test_dni_image_is_extracted_and_requires_confirmation(self) -> None:
+        """A valid DNI image should move the flow to the confirmation step."""
+        expected_age = ProviderRegistrationService._calculate_age("1990-03-20")
+        service = ProviderRegistrationService(
+            memory_config=SimpleNamespace(enabled=True),
+            openai_client=SimpleNamespace(
+                chat=SimpleNamespace(
+                    completions=SimpleNamespace(
+                        create=AsyncMock(
+                            return_value=SimpleNamespace(
+                                choices=[
+                                    SimpleNamespace(
+                                        message=SimpleNamespace(
+                                            content=(
+                                                '{"document_type":"dni_frente",'
+                                                '"is_dni":true,'
+                                                '"full_name":"Juan Perez",'
+                                                '"dni":"30111222",'
+                                                '"birth_date":"1990-03-20"}'
+                                            )
+                                        )
+                                    )
+                                ]
+                            )
+                        )
+                    )
+                )
+            ),
+        )
+        state_repo = SimpleNamespace(
+            get=AsyncMock(
+                return_value={
+                    "estado": provider_registration_service.REGISTRATION_STATE_NAME,
+                    "paso": "awaiting_dni",
+                }
+            ),
+            save=AsyncMock(),
+            delete=AsyncMock(),
+        )
+
+        with (
+            patch.object(
+                provider_registration_service,
+                "EstadoRepository",
+                return_value=state_repo,
+            ),
+            patch(
+                "builtins.open",
+                create=True,
+            ) as open_mock,
+        ):
+            open_mock.return_value.__enter__.return_value.read.return_value = b"fake-image"
+            response = await service.maybe_handle_registration(
+                user_id="5491162527111",
+                message="[imagen]",
+                metadata={
+                    "message_type": "image",
+                    "image_path": "tmp/dni.jpg",
+                    "mime_type": "image/jpeg",
+                },
+                deps=SimpleNamespace(db=SimpleNamespace(scalar=AsyncMock(return_value=None))),
+                memory_service=SimpleNamespace(upsert_memory=AsyncMock()),
+                turn_id="turn-dni-1",
+            )
+
+        self.assertIsNotNone(response)
+        self.assertIn("Detecté estos datos en tu DNI", response.message)
+        state_repo.save.assert_awaited_once_with(
+            "5491162527111",
+            {
+                "estado": provider_registration_service.REGISTRATION_STATE_NAME,
+                "paso": "awaiting_dni_confirmation",
+                "nombre": "Juan Perez",
+                "edad": expected_age,
+                "dni": "30111222",
+                "fecha_nacimiento": "1990-03-20",
+                "rubros": None,
+            },
+        )
+
+    async def test_invalid_dni_image_requests_better_photo(self) -> None:
+        """Non-DNI images should keep the flow on the DNI photo step."""
+        service = ProviderRegistrationService(
+            memory_config=SimpleNamespace(enabled=True),
+            openai_client=SimpleNamespace(
+                chat=SimpleNamespace(
+                    completions=SimpleNamespace(
+                        create=AsyncMock(
+                            return_value=SimpleNamespace(
+                                choices=[
+                                    SimpleNamespace(
+                                        message=SimpleNamespace(
+                                            content=(
+                                                '{"document_type":"otro",'
+                                                '"is_dni":false,'
+                                                '"full_name":null,'
+                                                '"dni":null,'
+                                                '"birth_date":null}'
+                                            )
+                                        )
+                                    )
+                                ]
+                            )
+                        )
+                    )
+                )
+            ),
+        )
+        state_repo = SimpleNamespace(
+            get=AsyncMock(
+                return_value={
+                    "estado": provider_registration_service.REGISTRATION_STATE_NAME,
+                    "paso": "awaiting_dni",
+                }
+            ),
+            save=AsyncMock(),
+            delete=AsyncMock(),
+        )
+
+        with (
+            patch.object(
+                provider_registration_service,
+                "EstadoRepository",
+                return_value=state_repo,
+            ),
+            patch(
+                "builtins.open",
+                create=True,
+            ) as open_mock,
+        ):
+            open_mock.return_value.__enter__.return_value.read.return_value = b"fake-image"
+            response = await service.maybe_handle_registration(
+                user_id="5491162527111",
+                message="[imagen]",
+                metadata={
+                    "message_type": "image",
+                    "image_path": "tmp/foto.jpg",
+                    "mime_type": "image/jpeg",
+                },
+                deps=SimpleNamespace(db=SimpleNamespace(scalar=AsyncMock(return_value=None))),
+                memory_service=SimpleNamespace(upsert_memory=AsyncMock()),
+                turn_id="turn-dni-invalid",
+            )
+
+        self.assertIsNotNone(response)
+        self.assertIn("No pude identificar que la imagen sea el frente de un DNI", response.message)
+        state_repo.save.assert_not_awaited()
+
+    async def test_dni_confirmation_yes_moves_to_trades(self) -> None:
+        """A positive DNI confirmation should continue directly to rubros."""
+        expected_age = ProviderRegistrationService._calculate_age("1990-03-20")
+        service = ProviderRegistrationService(memory_config=SimpleNamespace(enabled=True))
+        state_repo = SimpleNamespace(
+            get=AsyncMock(
+                return_value={
+                    "estado": provider_registration_service.REGISTRATION_STATE_NAME,
+                    "paso": "awaiting_dni_confirmation",
+                    "nombre": "Juan Perez",
+                    "edad": expected_age,
+                    "dni": "30111222",
+                    "fecha_nacimiento": "1990-03-20",
+                }
+            ),
+            save=AsyncMock(),
+            delete=AsyncMock(),
+        )
+
+        with patch.object(
+            provider_registration_service,
+            "EstadoRepository",
+            return_value=state_repo,
+        ):
+            response = await service.maybe_handle_registration(
+                user_id="5491162527111",
+                message="si",
+                metadata={"message_type": "text"},
+                deps=SimpleNamespace(db=SimpleNamespace(scalar=AsyncMock(return_value=None))),
+                memory_service=SimpleNamespace(upsert_memory=AsyncMock()),
+                turn_id="turn-dni-yes",
+            )
+
+        self.assertIsNotNone(response)
+        self.assertIn("Contame qué trabajos sabés hacer", response.message)
+        state_repo.save.assert_awaited_once_with(
+            "5491162527111",
+            {
+                "estado": provider_registration_service.REGISTRATION_STATE_NAME,
+                "paso": "awaiting_trades",
+                "nombre": "Juan Perez",
+                "edad": expected_age,
+                "dni": "30111222",
+                "fecha_nacimiento": "1990-03-20",
+                "rubros": None,
+            },
+        )
+
+    async def test_dni_confirmation_no_requests_new_photo(self) -> None:
+        """A negative DNI confirmation should ask for another DNI image."""
+        expected_age = ProviderRegistrationService._calculate_age("1990-03-20")
+        service = ProviderRegistrationService(memory_config=SimpleNamespace(enabled=True))
+        state_repo = SimpleNamespace(
+            get=AsyncMock(
+                return_value={
+                    "estado": provider_registration_service.REGISTRATION_STATE_NAME,
+                    "paso": "awaiting_dni_confirmation",
+                    "nombre": "Juan Perez",
+                    "edad": expected_age,
+                    "dni": "30111222",
+                    "fecha_nacimiento": "1990-03-20",
+                }
+            ),
+            save=AsyncMock(),
+            delete=AsyncMock(),
+        )
+
+        with patch.object(
+            provider_registration_service,
+            "EstadoRepository",
+            return_value=state_repo,
+        ):
+            response = await service.maybe_handle_registration(
+                user_id="5491162527111",
+                message="no",
+                metadata={"message_type": "text"},
+                deps=SimpleNamespace(db=SimpleNamespace(scalar=AsyncMock(return_value=None))),
+                memory_service=SimpleNamespace(upsert_memory=AsyncMock()),
+                turn_id="turn-dni-no",
+            )
+
+        self.assertIsNotNone(response)
+        self.assertIn("foto clara del frente de tu DNI", response.message)
+        state_repo.save.assert_awaited_once_with(
+            "5491162527111",
+            {
+                "estado": provider_registration_service.REGISTRATION_STATE_NAME,
+                "paso": "awaiting_dni",
+                "nombre": None,
+                "edad": None,
+                "dni": None,
+                "fecha_nacimiento": None,
                 "rubros": None,
             },
         )
@@ -105,7 +351,9 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
                     "estado": provider_registration_service.REGISTRATION_STATE_NAME,
                     "paso": "awaiting_trades",
                     "nombre": "Juan Perez",
-                    "edad": 34,
+                    "edad": 36,
+                    "dni": "30111222",
+                    "fecha_nacimiento": "1990-03-20",
                 }
             ),
             save=AsyncMock(),
@@ -138,7 +386,9 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
                 "estado": provider_registration_service.REGISTRATION_STATE_NAME,
                 "paso": "awaiting_zone",
                 "nombre": "Juan Perez",
-                "edad": 34,
+                "edad": 36,
+                "dni": "30111222",
+                "fecha_nacimiento": "1990-03-20",
                 "rubros": [
                     "Plomero",
                     "Electricista",
@@ -156,7 +406,9 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
                     "estado": provider_registration_service.REGISTRATION_STATE_NAME,
                     "paso": "awaiting_trades",
                     "nombre": "Juan Perez",
-                    "edad": 34,
+                    "edad": 36,
+                    "dni": "30111222",
+                    "fecha_nacimiento": "1990-03-20",
                 }
             ),
             save=AsyncMock(),
@@ -189,7 +441,9 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
                 "estado": provider_registration_service.REGISTRATION_STATE_NAME,
                 "paso": "awaiting_zone",
                 "nombre": "Juan Perez",
-                "edad": 34,
+                "edad": 36,
+                "dni": "30111222",
+                "fecha_nacimiento": "1990-03-20",
                 "rubros": ["Electricista"],
             },
         )
@@ -204,6 +458,8 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
                     "paso": "awaiting_zone",
                     "nombre": "Juan Perez",
                     "edad": 34,
+                    "dni": "30111222",
+                    "fecha_nacimiento": "1990-03-20",
                     "rubros": ["Plomeria", "Electricidad"],
                 }
             ),
@@ -255,6 +511,7 @@ class ProviderRegistrationServiceTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.intent, Intent.REGISTRAR_PRESTADOR)
         self.assertIn("ya inicié tu registro como prestador", response.message)
         self.assertEqual(response.entities["edad"], 34)
+        self.assertEqual(response.entities["dni"], "30111222")
         self.assertEqual(response.entities["barrio"], "Caballito")
         state_repo.delete.assert_awaited_once_with("5491162527111")
         memory_service.upsert_memory.assert_awaited_once_with(

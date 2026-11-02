@@ -6,10 +6,12 @@ service providers without relying on the LLM for every turn.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
 import unicodedata
+from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -39,6 +41,20 @@ _AI_TRADES_SYSTEM = (
     'Si el mensaje no describe servicios concretos, devolvé {"rubros": []}.\n'
     "No incluyas texto fuera del JSON."
 )
+_AI_DNI_SYSTEM = (
+    "Sos un asistente que analiza imágenes de documentos argentinos.\n"
+    "Primero determiná si la imagen corresponde al frente de un DNI argentino.\n"
+    "Respondé ÚNICAMENTE un JSON con este formato:\n"
+    '  {"document_type": "dni_frente"|"otro"|"desconocido", '
+    '"is_dni": true|false, "full_name": "Nombre Apellido"|null, '
+    '"dni": "12345678"|null, "birth_date": "YYYY-MM-DD"|null}.\n'
+    "Reglas:\n"
+    "- Si no estás seguro de que sea un DNI, devolvé is_dni=false.\n"
+    "- Si el documento no es un DNI o la imagen es ilegible, devolvé null en los datos.\n"
+    "- El DNI debe tener exactamente 8 dígitos.\n"
+    "- birth_date debe salir en formato YYYY-MM-DD si se puede leer.\n"
+    "- No agregues texto fuera del JSON."
+)
 
 REGISTRATION_STATE_NAME = "provider_registration"
 OFFER_SERVICES_BUTTON_ID = "post_terms_offer_services"
@@ -54,11 +70,6 @@ REGISTRATION_START_PATTERNS = (
     "quiero ser proveedor",
     "quiero ser prestador",
     "quiero publicar mis servicios",
-)
-NAME_PREFIXES = (
-    "me llamo ",
-    "mi nombre es ",
-    "soy ",
 )
 TRADE_PREFIXES = (
     "hago ",
@@ -77,6 +88,8 @@ ZONE_PREFIXES = (
     "mi barrio es ",
     "vivo en ",
 )
+DNI_CONFIRM_YES = {"si", "sí"}
+DNI_CONFIRM_NO = {"no"}
 
 
 class ProviderRegistrationService:
@@ -131,36 +144,24 @@ class ProviderRegistrationService:
                     confidence=1.0,
                     requires_action=False,
                 )
-            await self._save_state(state_repo, user_id, paso="awaiting_name")
-            return self._build_name_request_response()
+            await self._save_state(state_repo, user_id, paso="awaiting_dni")
+            return self._build_dni_request_response()
 
-        if paso == "awaiting_name":
-            nombre = self._extract_name(message)
-            if nombre is None:
-                return self._build_name_request_response(retry=True)
-            await self._save_state(
-                state_repo,
-                user_id,
-                paso="awaiting_age",
-                nombre=nombre,
+        if paso == "awaiting_dni":
+            return await self._handle_dni_step(
+                state_repo=state_repo,
+                user_id=user_id,
+                metadata=metadata,
             )
-            return self._build_age_request_response(nombre)
 
-        if paso == "awaiting_age":
-            edad = self._extract_age(message)
-            if edad is None:
-                return self._build_age_request_response(
-                    state.get("nombre"),
-                    retry=True,
-                )
-            await self._save_state(
-                state_repo,
-                user_id,
-                paso="awaiting_trades",
-                nombre=state.get("nombre"),
-                edad=edad,
+        if paso == "awaiting_dni_confirmation":
+            return await self._handle_dni_confirmation_step(
+                state_repo=state_repo,
+                user_id=user_id,
+                message=message,
+                metadata=metadata,
+                state=state,
             )
-            return self._build_trades_request_response()
 
         if paso == "awaiting_trades":
             rubros = await self._classify_trades(message)
@@ -172,6 +173,8 @@ class ProviderRegistrationService:
                 paso="awaiting_zone",
                 nombre=state.get("nombre"),
                 edad=state.get("edad"),
+                dni=state.get("dni"),
+                fecha_nacimiento=state.get("fecha_nacimiento"),
                 rubros=rubros,
             )
             return self._build_zone_request_response(rubros)
@@ -208,6 +211,8 @@ class ProviderRegistrationService:
         rubros = [str(item) for item in state.get("rubros") or [] if item]
         params = CrearPrestadorInput(
             nombre=str(state.get("nombre") or "Prestador"),
+            dni=str(state.get("dni") or "") or None,
+            edad=state.get("edad"),
             rubros=rubros or ["Servicios generales"],
             barrio=location.get("barrio"),
             ciudad=location.get("ciudad"),
@@ -217,7 +222,9 @@ class ProviderRegistrationService:
 
         entities = {
             "nombre": state.get("nombre"),
+            "dni": state.get("dni"),
             "edad": state.get("edad"),
+            "fecha_nacimiento": state.get("fecha_nacimiento"),
             "rubros": rubros,
             "barrio": location.get("barrio"),
             "ciudad": location.get("ciudad"),
@@ -257,10 +264,88 @@ class ProviderRegistrationService:
                 "provider_registration": {
                     "provider_id": result.get("id"),
                     "estado": result.get("estado"),
+                    "dni": state.get("dni"),
                     "edad": state.get("edad"),
                 }
             },
         )
+
+    async def _handle_dni_step(
+        self,
+        *,
+        state_repo: EstadoRepository,
+        user_id: str,
+        metadata: dict[str, Any] | None,
+    ) -> AgentResponse:
+        """Analyze the inbound DNI image and move the flow to confirmation."""
+        if not self._metadata_has_image(metadata):
+            return self._build_dni_request_response(retry=True)
+
+        extracted = await self._extract_dni_data(metadata)
+        if extracted is None:
+            return self._build_dni_processing_error_response()
+
+        if not extracted["is_dni"]:
+            return self._build_dni_request_response(retry=True, invalid_document=True)
+
+        if (
+            extracted["nombre"] is None
+            or extracted["dni"] is None
+            or extracted["fecha_nacimiento"] is None
+            or extracted["edad"] is None
+        ):
+            return self._build_dni_request_response(retry=True, invalid_document=True)
+
+        if extracted["edad"] < 18:
+            await state_repo.delete(user_id)
+            return self._build_underage_response()
+
+        await self._save_state(
+            state_repo,
+            user_id,
+            paso="awaiting_dni_confirmation",
+            nombre=extracted["nombre"],
+            edad=extracted["edad"],
+            dni=extracted["dni"],
+            fecha_nacimiento=extracted["fecha_nacimiento"],
+        )
+        return self._build_dni_confirmation_response(extracted)
+
+    async def _handle_dni_confirmation_step(
+        self,
+        *,
+        state_repo: EstadoRepository,
+        user_id: str,
+        message: str,
+        metadata: dict[str, Any] | None,
+        state: dict[str, Any],
+    ) -> AgentResponse:
+        """Accept or reject the detected DNI fields before continuing."""
+        if self._metadata_has_image(metadata):
+            return await self._handle_dni_step(
+                state_repo=state_repo,
+                user_id=user_id,
+                metadata=metadata,
+            )
+
+        confirmation = self._extract_confirmation(message)
+        if confirmation is True:
+            await self._save_state(
+                state_repo,
+                user_id,
+                paso="awaiting_trades",
+                nombre=state.get("nombre"),
+                edad=state.get("edad"),
+                dni=state.get("dni"),
+                fecha_nacimiento=state.get("fecha_nacimiento"),
+            )
+            return self._build_trades_request_response()
+
+        if confirmation is False:
+            await self._save_state(state_repo, user_id, paso="awaiting_dni")
+            return self._build_dni_request_response(retry=True)
+
+        return self._build_dni_confirmation_retry_response()
 
     async def _classify_trades(self, message: str) -> list[str]:
         """Extract canonical provider rubros from the user's free-text reply."""
@@ -327,6 +412,66 @@ class ProviderRegistrationService:
             "barrio": zone,
         }
 
+    async def _extract_dni_data(
+        self,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Run a vision-capable LLM over the DNI image and normalize the fields."""
+        image_path = self._image_path_from_metadata(metadata)
+        if image_path is None or self._openai is None:
+            return None
+
+        mime_type = self._image_mime_type(metadata)
+        data_url = self._build_image_data_url(image_path, mime_type)
+        if data_url is None:
+            return None
+
+        try:
+            resp = await self._openai.chat.completions.create(
+                model=self._openai_model,
+                messages=[
+                    {"role": "system", "content": _AI_DNI_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Analizá esta imagen. Primero decidí si es el "
+                                    "frente de un DNI argentino y luego extraé los "
+                                    "campos pedidos."
+                                ),
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": data_url},
+                            },
+                        ],
+                    },
+                ],
+                response_format={"type": "json_object"},
+                temperature=0,
+                max_tokens=256,
+            )
+            raw = resp.choices[0].message.content or "{}"
+            data = json.loads(raw)
+        except Exception:
+            logger.exception("DNI image analysis failed")
+            return None
+
+        document_type = str(data.get("document_type") or "desconocido").strip().lower()
+        is_dni = bool(data.get("is_dni")) or document_type == "dni_frente"
+        fecha_nacimiento = self._normalize_birth_date(data.get("birth_date"))
+        edad = self._calculate_age(fecha_nacimiento)
+        return {
+            "document_type": document_type,
+            "is_dni": is_dni,
+            "nombre": self._normalize_person_name(data.get("full_name")),
+            "dni": self._normalize_dni(data.get("dni")),
+            "fecha_nacimiento": fecha_nacimiento,
+            "edad": edad,
+        }
+
     @staticmethod
     async def _provider_exists(db: Any, user_id: str) -> bool:
         """Return True when the user already has a provider profile."""
@@ -348,6 +493,8 @@ class ProviderRegistrationService:
         paso: str,
         nombre: str | None = None,
         edad: int | None = None,
+        dni: str | None = None,
+        fecha_nacimiento: str | None = None,
         rubros: list[str] | None = None,
     ) -> None:
         """Persist the current onboarding step for the next user turn."""
@@ -358,6 +505,8 @@ class ProviderRegistrationService:
                 "paso": paso,
                 "nombre": nombre,
                 "edad": edad,
+                "dni": dni,
+                "fecha_nacimiento": fecha_nacimiento,
                 "rubros": rubros,
             },
         )
@@ -376,32 +525,6 @@ class ProviderRegistrationService:
 
         normalized = ProviderRegistrationService._normalize_message(message)
         return any(pattern in normalized for pattern in REGISTRATION_START_PATTERNS)
-
-    @staticmethod
-    def _extract_name(message: str) -> str | None:
-        """Extract a usable display name from a short onboarding reply."""
-        text = ProviderRegistrationService._strip_prefixes(message, NAME_PREFIXES)
-        text = text.strip(" .,!?:;")
-        if not text or any(char.isdigit() for char in text):
-            return None
-
-        words = re.findall(r"[A-Za-zÁÉÍÓÚáéíóúÑñ']+", text)
-        if not words:
-            return None
-
-        return " ".join(word.capitalize() for word in words[:4])
-
-    @staticmethod
-    def _extract_age(message: str) -> int | None:
-        """Parse the provider age from a short reply like 'tengo 32'."""
-        match = re.search(r"\b(\d{1,3})\b", message)
-        if match is None:
-            return None
-
-        age = int(match.group(1))
-        if age < 18 or age > 99:
-            return None
-        return age
 
     @staticmethod
     def _extract_zone(message: str) -> str | None:
@@ -501,11 +624,132 @@ class ProviderRegistrationService:
         return re.sub(r"\s+", " ", lowered).strip()
 
     @staticmethod
-    def _build_name_request_response(retry: bool = False) -> AgentResponse:
-        """Ask for the provider name."""
-        message = "Para registrarte como prestador necesito tu nombre. " "¿Cómo te llamás?"
-        if retry:
-            message = "Necesito tu nombre para seguir con el registro. ¿Cómo te llamás?"
+    def _normalize_person_name(value: Any) -> str | None:
+        """Sanitize a full name detected by the DNI OCR step."""
+        if not isinstance(value, str):
+            return None
+        words = re.findall(r"[A-Za-zÁÉÍÓÚáéíóúÑñ']+", value)
+        if not words:
+            return None
+        return " ".join(word.capitalize() for word in words[:6])
+
+    @staticmethod
+    def _normalize_dni(value: Any) -> str | None:
+        """Keep only 8-digit DNI values."""
+        if value is None:
+            return None
+        digits = re.sub(r"\D+", "", str(value))
+        if len(digits) != 8:
+            return None
+        return digits
+
+    @staticmethod
+    def _normalize_birth_date(value: Any) -> str | None:
+        """Normalize a detected birth date into ISO format."""
+        if not isinstance(value, str):
+            return None
+
+        cleaned = value.strip()
+        formats = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d")
+        for fmt in formats:
+            try:
+                return datetime.strptime(cleaned, fmt).date().isoformat()
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _calculate_age(birth_date_iso: str | None) -> int | None:
+        """Compute the current age in years from an ISO birth date."""
+        if birth_date_iso is None:
+            return None
+        try:
+            birth_date = date.fromisoformat(birth_date_iso)
+        except ValueError:
+            return None
+
+        today = date.today()
+        years = today.year - birth_date.year
+        if (today.month, today.day) < (birth_date.month, birth_date.day):
+            years -= 1
+        if years < 0:
+            return None
+        return years
+
+    @staticmethod
+    def _extract_confirmation(message: str) -> bool | None:
+        """Parse a short yes/no confirmation from the user reply."""
+        normalized = ProviderRegistrationService._normalize_message(message)
+        if normalized in DNI_CONFIRM_YES:
+            return True
+        if normalized in DNI_CONFIRM_NO:
+            return False
+        return None
+
+    @staticmethod
+    def _build_image_data_url(image_path: str, mime_type: str) -> str | None:
+        """Encode a local image file into a data URL for the vision model."""
+        try:
+            with open(image_path, "rb") as image_file:
+                encoded = base64.b64encode(image_file.read()).decode("ascii")
+        except OSError:
+            logger.exception("Could not read DNI image from %s", image_path)
+            return None
+        return f"data:{mime_type};base64,{encoded}"
+
+    @staticmethod
+    def _image_path_from_metadata(metadata: dict[str, Any] | None) -> str | None:
+        """Read the local image path saved by the webhook processor."""
+        if not metadata:
+            return None
+        path = metadata.get("image_path")
+        return path if isinstance(path, str) and path else None
+
+    @staticmethod
+    def _image_mime_type(metadata: dict[str, Any] | None) -> str:
+        """Return the image MIME type advertised by the channel metadata."""
+        if not metadata:
+            return "image/jpeg"
+        mime_type = metadata.get("mime_type")
+        return mime_type if isinstance(mime_type, str) and mime_type else "image/jpeg"
+
+    @staticmethod
+    def _metadata_has_image(metadata: dict[str, Any] | None) -> bool:
+        """Return True when the inbound message carries a downloaded image."""
+        return ProviderRegistrationService._image_path_from_metadata(metadata) is not None
+
+    @staticmethod
+    def _format_birth_date(birth_date_iso: str | None) -> str:
+        """Format an ISO date for user-facing confirmation text."""
+        if birth_date_iso is None:
+            return "no disponible"
+        try:
+            return date.fromisoformat(birth_date_iso).strftime("%d/%m/%Y")
+        except ValueError:
+            return birth_date_iso
+
+    @staticmethod
+    def _build_dni_request_response(
+        retry: bool = False,
+        invalid_document: bool = False,
+    ) -> AgentResponse:
+        """Ask the provider for a clear front photo of the DNI."""
+        if invalid_document:
+            message = (
+                "No pude identificar que la imagen sea el frente de un DNI o no se "
+                "ve con suficiente claridad. Mandame una foto más nítida del frente "
+                "de tu DNI. Es por temas legales y de seguridad."
+            )
+        elif retry:
+            message = (
+                "Necesito una foto clara del frente de tu DNI para seguir con el "
+                "registro. Es por temas legales y de seguridad."
+            )
+        else:
+            message = (
+                "Para registrarte como prestador necesito una foto clara del frente "
+                "de tu DNI. Es por temas legales y de seguridad."
+            )
         return AgentResponse(
             intent=Intent.REGISTRAR_PRESTADOR,
             message=message,
@@ -514,15 +758,54 @@ class ProviderRegistrationService:
         )
 
     @staticmethod
-    def _build_age_request_response(
-        nombre: str | None,
-        retry: bool = False,
-    ) -> AgentResponse:
-        """Ask for the provider age."""
-        intro = f"Genial, {nombre}. " if nombre else ""
-        message = f"{intro}Ahora decime tu edad."
-        if retry:
-            message = f"{intro}Necesito tu edad en números para seguir."
+    def _build_dni_processing_error_response() -> AgentResponse:
+        """Explain that the DNI photo could not be processed right now."""
+        return AgentResponse(
+            intent=Intent.REGISTRAR_PRESTADOR,
+            message=(
+                "No pude analizar la foto del DNI en este momento. Probá de nuevo "
+                "con una imagen clara del frente del DNI."
+            ),
+            confidence=1.0,
+            requires_action=False,
+        )
+
+    @staticmethod
+    def _build_dni_confirmation_response(extracted: dict[str, Any]) -> AgentResponse:
+        """Ask the user to confirm the data read from the DNI."""
+        message = (
+            "Detecté estos datos en tu DNI:\n"
+            f"- Nombre y apellido: {extracted['nombre']}\n"
+            f"- DNI: {extracted['dni']}\n"
+            "- Fecha de nacimiento: "
+            f"{ProviderRegistrationService._format_birth_date(extracted['fecha_nacimiento'])}\n"
+            "Si está bien respondeme SI. Si no, respondeme NO y mandame otra foto."
+        )
+        return AgentResponse(
+            intent=Intent.REGISTRAR_PRESTADOR,
+            message=message,
+            confidence=1.0,
+            requires_action=False,
+        )
+
+    @staticmethod
+    def _build_dni_confirmation_retry_response() -> AgentResponse:
+        """Ask for an explicit yes/no confirmation after the DNI OCR step."""
+        message = "Respondeme SI para confirmar los datos del DNI o NO para enviar otra foto."
+        return AgentResponse(
+            intent=Intent.REGISTRAR_PRESTADOR,
+            message=message,
+            confidence=1.0,
+            requires_action=False,
+        )
+
+    @staticmethod
+    def _build_underage_response() -> AgentResponse:
+        """Reject provider registration when the DNI shows a minor age."""
+        message = (
+            "No puedo completar el registro de prestador porque el DNI indica "
+            "que la persona es menor de edad."
+        )
         return AgentResponse(
             intent=Intent.REGISTRAR_PRESTADOR,
             message=message,

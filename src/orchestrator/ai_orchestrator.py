@@ -294,7 +294,9 @@ class AIOrchestrator:
                     await memory_service.process_interaction(
                         user_id=usuario_id,
                         user_message=message,
-                        assistant_response=location_update_response.message,
+                        assistant_response=self._content_for_persistence(
+                            location_update_response
+                        ),
                         conversation_id=context.conversation_id,
                         intent=location_update_response.intent.value,
                     )
@@ -323,7 +325,9 @@ class AIOrchestrator:
                     await memory_service.process_interaction(
                         user_id=usuario_id,
                         user_message=message,
-                        assistant_response=guided_search_response.message,
+                        assistant_response=self._content_for_persistence(
+                            guided_search_response
+                        ),
                         conversation_id=context.conversation_id,
                         intent=guided_search_response.intent.value,
                     )
@@ -360,7 +364,7 @@ class AIOrchestrator:
                 await memory_service.process_interaction(
                     user_id=usuario_id,
                     user_message=message,
-                    assistant_response=registration_response.message,
+                    assistant_response=self._content_for_persistence(registration_response),
                     conversation_id=context.conversation_id,
                     intent=registration_response.intent.value,
                 )
@@ -389,7 +393,7 @@ class AIOrchestrator:
                 await memory_service.process_interaction(
                     user_id=usuario_id,
                     user_message=message,
-                    assistant_response=profile_update_response.message,
+                    assistant_response=self._content_for_persistence(profile_update_response),
                     conversation_id=context.conversation_id,
                     intent=profile_update_response.intent.value,
                 )
@@ -498,7 +502,7 @@ class AIOrchestrator:
                 await memory_service.process_interaction(
                     user_id=usuario_id,
                     user_message=message,
-                    assistant_response=agent_response.message,
+                    assistant_response=self._content_for_persistence(agent_response),
                     conversation_id=context.conversation_id,
                     intent=agent_response.intent.value,
                 )
@@ -529,6 +533,18 @@ class AIOrchestrator:
             await db.rollback()
         except Exception:
             logger.exception("Rollback failed for user %s after %s", user_id, reason)
+
+    @staticmethod
+    def _content_for_persistence(agent_response: AgentResponse) -> str:
+        """Build the assistant content saved to conversation_turns.
+
+        Includes the per-item text of `agent_response.messages` (e.g. provider
+        cards sent as separate WhatsApp messages) so the admin panel's
+        conversation log reflects everything the user actually received.
+        """
+        parts = [agent_response.message] if agent_response.message else []
+        parts.extend(m.text for m in agent_response.messages if m.text)
+        return "\n\n".join(parts)
 
     @staticmethod
     def _to_orchestrator_response(

@@ -27,6 +27,8 @@ class Settings(BaseSettings):
 
     # ── Admin ─────────────────────────────────────────────────────────────
     admin_phone: str = ""
+    admin_username: str = ""
+    admin_password_hash: str = ""  # SHA-256 hex digest
 
     # ── Database ──────────────────────────────────────────────────────────
     database_url: str = "postgresql+asyncpg://postgres:postgres@postgres:5432/whatsapp_bot"
@@ -96,6 +98,12 @@ class Settings(BaseSettings):
             "Authorization": f"Bearer {self.whatsapp_token.get_secret_value()}",
             "Content-Type": "application/json",
         }
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def admin_phones(self) -> list[str]:
+        """Return configured admin phones (ADMIN_PHONE accepts a comma-separated list)."""
+        return [phone.strip() for phone in self.admin_phone.split(",") if phone.strip()]
 
     def openai_api_keys(self) -> tuple[str, ...]:
         """Return deduplicated configured OpenAI API keys in retry order."""

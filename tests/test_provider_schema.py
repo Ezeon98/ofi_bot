@@ -8,6 +8,8 @@ def test_provider_model_includes_searchable_location_columns() -> None:
     columns = ProviderModel.__table__.c
 
     assert "usuario_id" in columns
+    assert "dni" in columns
+    assert "edad" in columns
     assert "rubros" in columns
     assert "ciudad" in columns
     assert "barrio" in columns
@@ -22,6 +24,8 @@ def test_provider_model_constraints_support_single_profile_per_user() -> None:
     index_names = {index.name for index in ProviderModel.__table__.indexes}
 
     assert "uq_providers_usuario_id" in constraint_names
+    assert "ck_providers_dni_format" in constraint_names
+    assert "ck_providers_edad_range" in constraint_names
     assert "ck_providers_active_requires_location" in constraint_names
     assert "ix_providers_ciudad_barrio_activo" in index_names
     assert "ix_providers_zona" not in index_names  # zona index was removed

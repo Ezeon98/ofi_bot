@@ -128,6 +128,49 @@ class AudioProcessorTests(IsolatedAsyncioTestCase):
         enviar_mensaje_mock.assert_awaited_once()
         os_mock.remove.assert_called_once_with("tmp/audio.ogg")
 
+    async def test_image_message_routes_local_path_metadata(self) -> None:
+        """A valid image should be downloaded and routed with image metadata."""
+        uow = SimpleNamespace()
+        message = {
+            "image": {
+                "id": "media-image-123",
+                "mime_type": "image/jpeg",
+                "caption": "frente dni",
+            }
+        }
+
+        with (
+            patch.object(processor, "descargar_media", new=AsyncMock()),
+            patch.object(processor, "procesar_texto", new=AsyncMock()) as procesar_texto_mock,
+            patch.object(processor, "enviar_mensaje", new=AsyncMock()) as enviar_mensaje_mock,
+            patch.object(processor, "os") as os_mock,
+        ):
+            os_mock.path.join.return_value = "tmp/dni.jpg"
+            os_mock.path.exists.return_value = True
+
+            await processor._process_image_message(
+                uow,
+                "5491112345678",
+                message,
+                "wamid-image-1",
+            )
+
+        procesar_texto_mock.assert_awaited_once_with(
+            uow,
+            "5491112345678",
+            "frente dni",
+            "wamid-image-1",
+            metadata={
+                "message_type": "image",
+                "media_id": "media-image-123",
+                "image_path": "tmp/dni.jpg",
+                "mime_type": "image/jpeg",
+                "caption": "frente dni",
+            },
+        )
+        enviar_mensaje_mock.assert_not_awaited()
+        os_mock.remove.assert_called_once_with("tmp/dni.jpg")
+
     async def test_post_terms_search_button_routes_requested_mode_metadata(self) -> None:
         """The post-terms search button should pass explicit mode metadata."""
         uow = SimpleNamespace(
